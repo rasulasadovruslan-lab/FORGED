@@ -49,6 +49,35 @@ label{font-weight:600}
 .card{border-left:2px solid var(--fg)}
 #splash{position:fixed;inset:0;z-index:99;background:#000;display:grid;place-items:center;animation:spOut .5s ease .8s forwards}
 #splash img{width:min(72vw,440px);animation:spIn .7s cubic-bezier(.2,.7,.2,1) both}
-@keyframes spIn{from{opacity:0;transform:scale(.94);filter:brightness(.4)}to{opacity:1;transform:none;filter:none}}
+@keyframes spIn{from{clip-path:polygon(0 0,0 0,-14% 100%,0 100%);filter:brightness(2.2)}to{clip-path:polygon(0 0,114% 0,100% 100%,-14% 100%);filter:none}}
 @keyframes spOut{to{opacity:0;visibility:hidden}}
 @media(prefers-reduced-motion:reduce){#splash img{animation:none}}
+
+:root{--base:.85s}html.quick{--base:.2s}
+.quick #splash{animation:spOut .3s ease .25s forwards}.quick #splash img{animation-duration:.25s}
+#fx{position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:0}
+main{position:relative;z-index:1}
+.card{position:relative;transition:border-color .2s;background-image:radial-gradient(240px circle at var(--mx,-999px) var(--my,-999px),color-mix(in srgb,var(--fg) 8%,transparent),transparent 70%)}
+.card:hover{border-color:var(--mut)}
+.btn{position:relative;overflow:hidden;transition:transform .15s}.btn:hover{transform:translateY(-1px)}.btn:active{transform:scale(.97)}
+.btn::after{content:"";position:absolute;inset:0;background:linear-gradient(105deg,transparent 40%,rgba(255,255,255,.35) 50%,transparent 60%);transform:translateX(-120%);transition:transform .6s}.btn:hover::after{transform:translateX(120%)}
+.btn.ghost.sel{border-color:var(--fg)}
+nav a{transition:color .2s,background .2s}nav a:hover{color:var(--fg)}
+input:focus,textarea:focus{box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 25%,transparent);outline:none}
+.day{transition:transform .15s,border-color .15s,color .15s}.day:not(:disabled):hover{border-color:var(--fg);color:var(--fg);transform:translateY(-2px)}.day:not(:disabled):active{transform:scale(.88)}
+.day.s1:not(:disabled):hover{color:var(--on)}
+.fr .bar{margin-top:6px}
+.seal{display:inline-block;border:1px solid var(--fg);padding:0 8px;margin-right:8px;font-size:12px;transform:rotate(-4deg);animation:stamp .5s both}
+#pv{position:relative;display:inline-flex}
+#pv::before{content:"";position:absolute;inset:-8px;border-radius:50%;background:conic-gradient(var(--fg),transparent 45%,var(--fg));-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 2px),#000 calc(100% - 2px));mask:radial-gradient(farthest-side,transparent calc(100% - 2px),#000 calc(100% - 2px));animation:spin 6s linear infinite}
+.toast{animation:tin .35s cubic-bezier(.2,.8,.2,1) both}
+body.leave #app{opacity:0;transform:translateY(8px);transition:opacity .2s,transform .2s}
+.intro>*,.intro .fr,.intro #gl>.card,.intro .grid>.card{animation:rise .6s cubic-bezier(.2,.7,.2,1) both;animation-delay:calc(var(--base) + var(--i,0)*70ms)}
+.intro .bar i{animation:grow 1s cubic-bezier(.2,.7,.2,1) var(--base) both}
+.stamp{animation:stamp .35s cubic-bezier(.2,.8,.2,1)}
+@keyframes rise{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}
+@keyframes grow{from{width:0}}
+@keyframes stamp{0%{transform:scale(1.7);opacity:0}60%{transform:scale(.92)}100%{transform:scale(1);opacity:1}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes tin{from{opacity:0;transform:translate(-50%,16px)}to{opacity:1;transform:translate(-50%,0)}}
+@media(prefers-reduced-motion:reduce){.intro>*,.intro .fr,.intro .card,.intro .bar i,.stamp,.seal,.toast,#pv::before{animation:none!important}}
