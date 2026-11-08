@@ -6,6 +6,8 @@ import {
   signInWithEmailAndPassword,
   signOut,
   deleteUser,
+  reauthenticateWithCredential,
+  EmailAuthProvider,
 } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 import {
   getFirestore,
@@ -22,6 +24,7 @@ import {
   getDocs,
   onSnapshot,
   serverTimestamp,
+  deleteField,
 } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
 // ===== PASTE YOUR FIREBASE CONFIG HERE =====
@@ -57,7 +60,15 @@ const toast = (t) => {
   setTimeout(() => e.remove(), 3000);
 };
 const err = (e) =>
+  (/are-blocked|api-key-not-valid|api-key-service-blocked/.test(e.code || "")
+    ? "Google is blocking this site: check the API key restrictions"
+    : null) ||
   ({
+    "auth/requires-recent-login": "Please log in again, then retry",
+    "permission-denied": "Permission denied: check Firestore rules",
+    "auth/unauthorized-domain": "This domain is not authorized in Firebase Auth",
+    "auth/operation-not-allowed": "Email/Password sign-in is not enabled in Firebase",
+    "auth/network-request-failed": "Network error. Check your connection",
     "auth/invalid-credential": "Wrong email or password",
     "auth/email-already-in-use": "That email already has an account",
     "auth/weak-password": "Password needs 6+ characters",
@@ -66,6 +77,11 @@ const err = (e) =>
   })[e.code] ||
   e.message ||
   "Something went wrong";
+const onErr = (e) => {
+  console.error(e);
+  toast(err(e));
+};
+const ds = (d) => d.toLocaleDateString("sv");
 const validName = (n) => /^[a-z0-9_]{3,20}$/i.test(n);
 const A = (p) =>
   p.photo
@@ -139,6 +155,15 @@ const streak = (d, idx) => {
     else break;
   }
   return s;
+};
+const bestRun = (d) => {
+  let b = 0,
+    c = 0;
+  for (let i = 0; i < 30; i++) {
+    if (d[i] == 1) b = Math.max(b, ++c);
+    else c = 0;
+  }
+  return b;
 };
 function embers() {
   if (matchMedia("(prefers-reduced-motion:reduce)").matches) return;
@@ -231,7 +256,14 @@ P.auth = () => {
         if (!validName(un))
           throw { message: "Username: 3-20 letters, numbers or _" };
         const c = await createUserWithEmailAndPassword(auth, em, pw);
-        if (await nameTaken(un)) {
+        let taken;
+        try {
+          taken = await nameTaken(un);
+        } catch (x) {
+          await deleteUser(c.user).catch(() => {});
+          throw x;
+        }
+        if (taken) {
           await deleteUser(c.user);
           throw { message: "That username is taken" };
         }
@@ -257,66 +289,174 @@ P.auth = () => {
 };
 
 P.goals = () => {
-  m().innerHTML = `<h2>Your goals</h2><div class="card stat"><span id="all">0%</span><small>overall completion</small></div>
- <form id="gf" class="row card" style="flex-direction:row"><input id="gt" placeholder="New 30-day goal, e.g. Read 20 pages" required maxlength="60"><button class="btn">Start</button></form><div id="gl"></div>`;
-  const col = collection(db, "users", me.uid, "goals"),
-    G = {};
+  m().innerHTML = `<div class="row sb"><h2>Your goals</h2><button class="link" id="rs">Restart 30 days</button></div>
+ <div class="card gauge"><div class="ring"><svg viewBox="0 0 220 220" aria-hidden="true"><circle class="tr" cx="110" cy="110" r="90"/><circle class="no" id="rg2" cx="110" cy="110" r="90" stroke-dasharray="0 999"/><circle class="ok" id="rg1" cx="110" cy="110" r="90" stroke-dasharray="0 999"/></svg><div class="rc"><span id="all">0%</span><small id="cyc"></small></div></div>
+ <small id="lg"></small>
+ <div class="meters"><div><div class="row sb"><b>Success</b><b id="ms">-</b></div><div class="bar"><i id="mb1" style="width:0"></i></div></div><div><div class="row sb"><b>Fail</b><b id="mf">-</b></div><div class="bar fail"><i id="mb2" style="width:0"></i></div></div></div></div>
+ <form id="gf" class="row card" style="flex-direction:row"><input id="gt" placeholder="Add a goal, e.g. Read 20 pages" required maxlength="60"><button class="btn">Add</button></form><div id="gl"></div>`;
+  const col = collection(db, "users", me.uid, "goals");
+  let cs = profile.cycleStart || "",
+    docs = [],
+    firstDraw = true;
+  const D0 = (s) => new Date(s + "T00:00:00");
+  const tIdx = () => {
+    const t = new Date();
+    t.setHours(0, 0, 0, 0);
+    return Math.round((t - D0(cs)) / 864e5);
+  };
+  const dayDate = (i) => {
+    const d = D0(cs);
+    d.setDate(d.getDate() + i);
+    return d;
+  };
+  const restart = async () => {
+    if (!confirm("Start a new 30 days? All checkmarks will reset.")) return;
+    try {
+      cs = ds(new Date());
+      profile.cycleStart = cs;
+      await updateDoc(doc(db, "users", me.uid), { cycleStart: cs });
+      await Promise.all(
+        docs.map((x) => updateDoc(x.ref, { d: Array(30).fill(0) })),
+      );
+      toast("New 30 days started");
+    } catch (x) {
+      toast(err(x));
+    }
+  };
+  $("#rs").onclick = restart;
   $("#gf").onsubmit = async (e) => {
     e.preventDefault();
     const t = $("#gt").value.trim();
     if (!t) return;
-    await addDoc(col, {
-      title: t,
-      start: new Date().toLocaleDateString("sv"),
-      d: Array(30).fill(0),
-      at: serverTimestamp(),
-    });
-    $("#gt").value = "";
+    try {
+      await addDoc(col, { title: t, d: Array(30).fill(0), at: serverTimestamp() });
+      $("#gt").value = "";
+    } catch (x) {
+      toast(err(x));
+    }
   };
-  onSnapshot(query(col, orderBy("at")), (s) => {
-    const t0 = new Date();
-    t0.setHours(0, 0, 0, 0);
+  const draw = () => {
+    const idx = tIdx(),
+      n = docs.length,
+      old = $(".sheet"),
+      sl = old ? old.scrollLeft : null;
     let sum = 0;
+    const head = Array.from({ length: 30 }, (_, i) => {
+      const dt = dayDate(i);
+      return `<th class="dh${i === idx ? " today" : ""}" title="${dt.toDateString()}"><b>${i + 1}</b><small>${dt.getDate()}</small></th>`;
+    }).join("");
+    const rows = docs
+      .map((x) => {
+        const g = x.data(),
+          d = Array.from({ length: 30 }, (_, i) => (g.d || [])[i]),
+          p = Math.round((d.filter((v) => v == 1).length / 30) * 100);
+        sum += p;
+        return `<tr><th class="gn" scope="row"><div class="gc"><div><b>${esc(g.title)}</b><br><small>${p}% · streak ${streak(d, idx)}</small>${p === 100 ? ' <span class="seal">Forged</span>' : ""}</div><button class="link" data-del="${x.id}" title="Delete goal">✕</button></div></th>${d.map((v, i) => `<td class="${i === idx ? "today" : ""}"><input type="checkbox" data-g="${x.id}" data-i="${i}" ${v == 1 ? "checked" : ""} ${i > idx ? "disabled" : ""} aria-label="${esc(g.title)} day ${i + 1}"></td>`).join("")}</tr>`;
+      })
+      .join("");
+    const foot = Array.from({ length: 30 }, (_, i) => {
+      const c = docs.filter((x) => (x.data().d || [])[i] == 1).length;
+      return `<td class="${i === idx ? "today" : ""}">${i <= idx ? c : ""}</td>`;
+    }).join("");
+    const banner =
+      idx >= 30
+        ? `<div class="card"><b>30 days complete.</b><small>Check your report, then start fresh when you're ready.</small><div class="row"><button class="btn" id="rs2">Start new 30 days</button><a class="btn ghost" href="report.html">View report</a></div></div>`
+        : "";
     $("#gl").innerHTML =
-      s.docs
-        .map((x) => {
-          const g = (G[x.id] = x.data()),
-            p = Math.round((g.d.filter((v) => v == 1).length / 30) * 100),
-            idx = Math.round((t0 - new Date(g.start + "T00:00:00")) / 864e5);
-          sum += p;
-          return `<div class="card"><div class="row sb"><b>${esc(g.title)}</b><b>${p === 100 ? '<span class="seal">Forged</span>' : ""}${p}%</b></div><div class="bar"><i style="width:${p}%"></i></div><div class="row sb"><small>Day ${Math.min(Math.max(idx + 1, 1), 30)} of 30</small><small>Streak ${streak(g.d, idx)}</small></div>
-   <div class="days">${g.d.map((v, i) => `<button class="day s${v}${tap === x.id + "_" + i ? " stamp" : ""}" data-g="${x.id}" data-i="${i}" ${i > idx ? "disabled" : ""}>${v == 1 ? "✓" : v == 2 ? "✕" : i + 1}</button>`).join("")}</div>
-   <div class="row sb"><small>Started ${g.start}. Tap a day: done, missed, clear.</small><button class="link" data-del="${x.id}">Delete</button></div></div>`;
-        })
-        .join("") ||
-      '<p class="muted">No goals yet. Add your first one above.</p>';
-    const all = s.size ? Math.round(sum / s.size) : 0;
-    setTimeout(
-      () => count($("#all"), all),
-      (() => {
-        const d = first ? (quick ? 250 : 900) : 0;
-        first = false;
-        return d;
-      })(),
-    );
+      banner +
+      (n
+        ? `<div class="sheet"><table><thead><tr><th class="gn">Goal</th>${head}</tr></thead><tbody>${rows}</tbody><tfoot><tr class="ft"><th class="gn">Done</th>${foot}</tr></tfoot></table></div>`
+        : '<p class="muted">No goals yet. Add your first one above.</p>');
+    const sh = $(".sheet");
+    if (sh) sh.scrollLeft = sl === null ? Math.max(0, idx * 36 - 140) : sl;
+    $("#cyc").textContent =
+      idx >= 30
+        ? "overall · cycle finished"
+        : idx < 0
+          ? "overall · starts " + cs
+          : `overall · Day ${idx + 1} of 30 · ${dayDate(idx).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}`;
+    // big ring + success/fail meters
+    const C = 2 * Math.PI * 90,
+      total = n * 30,
+      past = Math.min(Math.max(idx, 0), 30);
+    let done = 0,
+      donePast = 0;
+    docs.forEach((x) => {
+      const d = x.data().d || [];
+      for (let i = 0; i < 30; i++)
+        if (d[i] == 1) {
+          done++;
+          if (i < past) donePast++;
+        }
+    });
+    const missed = n * past - donePast,
+      seg = (id, from, len) => {
+        const c = $(id);
+        c.setAttribute("stroke-dasharray", `${total ? (C * len) / total : 0} ${C}`);
+        c.setAttribute("stroke-dashoffset", -(total ? (C * from) / total : 0));
+      };
+    seg("#rg1", 0, done);
+    seg("#rg2", done, missed);
+    const hit = n * past ? Math.round((donePast / (n * past)) * 100) : null;
+    $("#ms").textContent = hit === null ? "-" : hit + "%";
+    $("#mf").textContent = hit === null ? "-" : 100 - hit + "%";
+    $("#mb1").style.width = (hit || 0) + "%";
+    $("#mb2").style.width = (hit === null ? 0 : 100 - hit) + "%";
+    $("#lg").textContent = `${done} done · ${missed} missed · ${Math.max(total - done - missed, 0)} to go`;
+    const all = n ? Math.round(sum / n) : 0,
+      dl = firstDraw ? (quick ? 250 : 900) : 0;
+    firstDraw = false;
+    setTimeout(() => count($("#all"), all), dl);
     if (profile.pct !== all) {
       profile.pct = all;
-      updateDoc(doc(db, "users", me.uid), { pct: all });
+      updateDoc(doc(db, "users", me.uid), { pct: all }).catch(() => {});
     }
-  });
+  };
+  onSnapshot(
+    query(col, orderBy("at")),
+    (s) => {
+      docs = s.docs;
+      if (!cs) {
+        cs =
+          docs.map((x) => x.data().start).filter(Boolean).sort()[0] ||
+          ds(new Date());
+        profile.cycleStart = cs;
+        updateDoc(doc(db, "users", me.uid), { cycleStart: cs }).catch(() => {});
+      }
+      // migrate goals made with the old per-goal start date
+      docs.forEach((x) => {
+        const g = x.data();
+        if (!g.start) return;
+        const off = Math.max(0, Math.round((D0(g.start) - D0(cs)) / 864e5));
+        updateDoc(x.ref, {
+          d: [...Array(off).fill(0), ...(g.d || [])]
+            .slice(0, 30)
+            .map((v) => (v == 1 ? 1 : 0)),
+          start: deleteField(),
+        }).catch(() => {});
+      });
+      draw();
+    },
+    onErr,
+  );
   $("#gl").onclick = (e) => {
     const b = e.target.closest("button");
     if (!b) return;
-    if (b.dataset.del) {
-      if (confirm("Delete this goal?")) deleteDoc(doc(col, b.dataset.del));
-      return;
-    }
-    const d = [...G[b.dataset.g].d],
-      i = +b.dataset.i;
-    d[i] = (d[i] + 1) % 3;
-    tap = b.dataset.g + "_" + i;
-    setTimeout(() => (tap = null), 500);
-    updateDoc(doc(col, b.dataset.g), { d });
+    if (b.id === "rs2") return restart();
+    if (b.dataset.del && confirm("Delete this goal and its checkmarks?"))
+      deleteDoc(doc(col, b.dataset.del)).catch((x) => toast(err(x)));
+  };
+  $("#gl").onchange = (e) => {
+    const c = e.target;
+    if (!c.dataset || !c.dataset.g) return;
+    const x = docs.find((y) => y.id === c.dataset.g);
+    if (!x) return;
+    const d = Array.from({ length: 30 }, (_, i) => ((x.data().d || [])[i] == 1 ? 1 : 0));
+    d[+c.dataset.i] = c.checked ? 1 : 0;
+    updateDoc(x.ref, { d }).catch((y) => {
+      c.checked = !c.checked;
+      toast(err(y));
+    });
   };
 };
 
@@ -333,7 +473,7 @@ P.notes = () => {
             `<div class="card"><textarea data-id="${x.id}" placeholder="Write something...">${esc(x.data().text)}</textarea><button class="link" data-del="${x.id}">Delete</button></div>`,
         )
         .join("") || '<p class="muted">No notes yet. Tap New note.</p>';
-  });
+  }, (e) => { console.error(e); toast(err(e)); });
   $("#nl").onfocusout = (e) => {
     if (e.target.tagName === "TEXTAREA")
       updateDoc(doc(col, e.target.dataset.id), { text: e.target.value }).then(
@@ -368,7 +508,8 @@ P.friends = () => {
       });
       toast("Request sent");
       $("#fu").value = "";
-    } catch {
+    } catch (x) {
+      console.error(x);
       toast("A request with this person already exists");
     }
   };
@@ -419,6 +560,7 @@ P.friends = () => {
           sec("Sent", out, () => "waiting for them") ||
         '<p class="muted">No friends yet. Search a username above.</p>';
     },
+    (e) => { console.error(e); toast(err(e)); },
   );
   $("#fl").onclick = (e) => {
     const b = e.target.closest("button");
@@ -469,8 +611,12 @@ P.settings = () => {
   m().innerHTML = `<h2>Settings</h2>
  <div class="card"><label>Username</label><div class="row"><input id="su" value="${esc(profile.username)}" maxlength="20"><button class="btn" id="sun">Change</button></div></div>
  <div class="card"><label>Theme</label><div class="row"><button class="btn ghost" data-t="dark">Black</button><button class="btn ghost" data-t="light">White</button></div>
- <label>Accent color</label><div class="row"><input type="color" id="sc" value="${profile.accent || "#888888"}"><button class="btn ghost" id="sr">Reset to default</button></div></div>
- <div class="card"><button class="btn ghost" id="so">Sign out</button></div>`;
+ <label>Accent color</label><div class="row"><input type="color" id="sc" value="${profile.accent || "#888888"}"><button class="btn ghost" id="sr">Reset accent</button></div>
+ <div><button class="btn ghost" id="sd">Reset all settings to default</button></div></div>
+ <div class="card"><label>Progress report</label><small>Completion, streaks, missed days and your strongest goals for this 30-day cycle.</small><div><a class="btn ghost" href="report.html">Open report</a></div></div>
+ <div class="card"><button class="btn ghost" id="so">Log out</button></div>
+ <div class="card danger"><label>Delete account</label><small>Permanently deletes your goals, notes, friendships and profile. This cannot be undone.</small>
+ <input type="password" id="dp" placeholder="Your password" autocomplete="current-password"><input id="dc" placeholder="Type DELETE to confirm" autocomplete="off" autocapitalize="characters" spellcheck="false"><div><button class="btn" id="dx" disabled>Delete my account</button></div></div>`;
   const mark = () =>
     document
       .querySelectorAll("[data-t]")
@@ -486,17 +632,127 @@ P.settings = () => {
   $("#sun").onclick = async () => {
     const n = $("#su").value.trim();
     if (!validName(n)) return toast("Username: 3-20 letters, numbers or _");
-    if (await nameTaken(n)) return toast("That username is taken");
-    await save({ username: n, usernameLower: n.toLowerCase() });
-    toast("Username changed");
+    try {
+      if (await nameTaken(n)) return toast("That username is taken");
+      await save({ username: n, usernameLower: n.toLowerCase() });
+      toast("Username changed");
+    } catch (x) {
+      toast(err(x));
+    }
   };
   document
     .querySelectorAll("[data-t]")
     .forEach((b) => (b.onclick = () => save({ theme: b.dataset.t })));
   mark();
   $("#sc").onchange = (e) => save({ accent: e.target.value });
-  $("#sr").onclick = () => save({ accent: "" });
+  $("#sr").onclick = () => {
+    $("#sc").value = "#888888";
+    save({ accent: "" });
+  };
+  $("#sd").onclick = async () => {
+    $("#sc").value = "#888888";
+    await save({ theme: "dark", accent: "" });
+    toast("Settings reset to default");
+  };
   $("#so").onclick = () => signOut(auth);
+
+  const ready = () =>
+    ($("#dx").disabled = !($("#dp").value && $("#dc").value.trim() === "DELETE"));
+  $("#dp").oninput = $("#dc").oninput = ready;
+  $("#dx").onclick = async () => {
+    if (!confirm("Last chance: permanently delete your account and all your data?")) return;
+    const b = $("#dx");
+    b.disabled = true;
+    try {
+      const u = auth.currentUser;
+      // 1) prove it's really you
+      await reauthenticateWithCredential(
+        u,
+        EmailAuthProvider.credential(u.email, $("#dp").value),
+      );
+      // 2) wipe data while we still have permission
+      for (const s of ["goals", "notes"]) {
+        const r = await getDocs(collection(db, "users", u.uid, s));
+        await Promise.all(r.docs.map((d) => deleteDoc(d.ref)));
+      }
+      const f = await getDocs(
+        query(collection(db, "friendships"), where("users", "array-contains", u.uid)),
+      );
+      await Promise.all(f.docs.map((d) => deleteDoc(d.ref)));
+      await deleteDoc(doc(db, "users", u.uid));
+      // 3) finally remove the login itself
+      await deleteUser(u);
+      try {
+        localStorage.removeItem("t30");
+      } catch {}
+      location = "index.html";
+    } catch (x) {
+      console.error(x);
+      toast(err(x));
+      b.disabled = false;
+    }
+  };
+};
+
+P.report = async () => {
+  m().innerHTML = `<div class="row sb"><h2>Report</h2><a href="settings.html">← Settings</a></div><div id="rp"><p class="muted">Loading...</p></div>`;
+  let s;
+  try {
+    s = await getDocs(query(collection(db, "users", me.uid, "goals"), orderBy("at")));
+  } catch (x) {
+    $("#rp").innerHTML = "";
+    return onErr(x);
+  }
+  if (s.empty) {
+    $("#rp").innerHTML =
+      '<p class="muted">No goals yet. Add some on the Goals page and your report will show up here.</p>';
+    return;
+  }
+  const t = new Date();
+  t.setHours(0, 0, 0, 0);
+  const cs = profile.cycleStart,
+    idx = cs ? Math.round((t - new Date(cs + "T00:00:00")) / 864e5) : 0,
+    past = Math.min(Math.max(idx, 0), 30);
+  const rows = s.docs.map((x) => {
+    const g = x.data(),
+      d = Array.from({ length: 30 }, (_, i) => ((g.d || [])[i] == 1 ? 1 : 0)),
+      sum = (a) => a.reduce((p, c) => p + c, 0),
+      done = sum(d),
+      pd = sum(d.slice(0, past));
+    return {
+      t: g.title,
+      d,
+      done,
+      miss: past - pd,
+      rate: past ? Math.round((pd / past) * 100) : null,
+      p: Math.round((done / 30) * 100),
+      cur: streak(d, idx),
+      best: bestRun(d),
+    };
+  });
+  const total = rows.reduce((a, r) => a + r.done, 0),
+    overall = Math.round(rows.reduce((a, r) => a + r.p, 0) / rows.length);
+  let perfect = 0;
+  for (let i = 0; i < past; i++) if (rows.every((r) => r.d[i])) perfect++;
+  const sorted = [...rows].sort((a, b) => b.p - a.p),
+    top = sorted[0],
+    low = sorted[sorted.length - 1];
+  $("#rp").innerHTML = `<div class="grid">${[
+    ["Overall completion", overall + "%"],
+    ["Check-ins", total],
+    ["Cycle day", Math.min(Math.max(idx + 1, 1), 30) + " / 30"],
+    ["Perfect days", perfect],
+  ]
+    .map(([k, v]) => `<div class="card"><small>${k}</small><span class="big">${v}</span></div>`)
+    .join("")}</div>
+ <div class="card"><small>Strongest goal</small><b>${esc(top.t)} · ${top.p}%</b>${rows.length > 1 ? `<small>Needs the most attention</small><b>${esc(low.t)} · ${low.p}%</b>` : ""}</div>
+ <h3>By goal</h3><div class="rt"><table><thead><tr><th>Goal</th><th>Done</th><th>Missed</th><th>Hit rate</th><th>Streak</th><th>Best</th></tr></thead><tbody>${rows
+   .map(
+     (r) =>
+       `<tr><td>${esc(r.t)}</td><td>${r.done}/30</td><td>${r.miss}</td><td>${r.rate === null ? "-" : r.rate + "%"}</td><td>${r.cur}</td><td>${r.best}</td></tr>`,
+   )
+   .join("")}</tbody></table></div>
+ <p class="muted"><small>Hit rate = checked days ÷ days that have already passed. Missed counts only past days, so today is never a miss until tomorrow.</small></p>`;
 };
 
 if (page === "auth") P.auth();
@@ -517,8 +773,22 @@ onAuthStateChanged(auth, async (u) => {
   applyTheme(profile);
   document.body.insertAdjacentHTML(
     "afterbegin",
-    `<header><a class="logo" href="goals.html"><img src="logo.png" alt="Forged"></a><nav>${["goals", "notes", "friends", "profile", "settings"].map((k) => `<a href="${k}.html" class="${k === page ? "on" : ""}">${k[0].toUpperCase() + k.slice(1)}</a>`).join("")}</nav>${A(profile)}</header>`,
+    `<header><a class="logo" href="goals.html"><img src="logo.png" alt="Forged"></a><span class="date" id="dt">${new Date().toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}</span><nav>${["goals", "notes", "friends"].map((k) => `<a href="${k}.html" class="${k === page ? "on" : ""}">${k[0].toUpperCase() + k.slice(1)}</a>`).join("")}</nav><div class="pm"><button class="avb" id="pb" aria-label="Account menu" aria-haspopup="true" aria-expanded="false">${A(profile)}</button><div class="menu" id="am" hidden><a href="profile.html">Profile</a><a href="settings.html">Settings</a><a href="report.html">Report</a><button id="lo">Log out</button></div></div></header>`,
   );
+  const pb = $("#pb"),
+    am = $("#am"),
+    shut = () => {
+      am.hidden = true;
+      pb.setAttribute("aria-expanded", "false");
+    };
+  pb.onclick = (e) => {
+    e.stopPropagation();
+    am.hidden = !am.hidden;
+    pb.setAttribute("aria-expanded", String(!am.hidden));
+  };
+  document.addEventListener("click", shut);
+  document.addEventListener("keydown", (e) => e.key === "Escape" && shut());
+  $("#lo").onclick = () => signOut(auth);
   P[page]();
 });
 
@@ -528,3 +798,9 @@ setTimeout(() => mn.classList.remove("intro"), 2600);
 new MutationObserver(stag).observe(mn, { childList: true, subtree: true });
 stag();
 embers();
+
+// the site knows the date: reload when midnight passes
+const day0 = ds(new Date());
+setInterval(() => {
+  if (ds(new Date()) !== day0) location.reload();
+}, 60000);
