@@ -26,10 +26,12 @@ import {
 
 // ===== PASTE YOUR FIREBASE CONFIG HERE =====
 const cfg = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT.firebaseapp.com",
-  projectId: "YOUR_PROJECT",
-  appId: "YOUR_APP_ID",
+  apiKey: "AIzaSyCJpjlOc1xGqzC9Khr2vRFy5FXAyu_shq0",
+  authDomain: "forged-5658d.firebaseapp.com",
+  projectId: "forged-5658d",
+  storageBucket: "forged-5658d.firebasestorage.app",
+  messagingSenderId: "177677777560",
+  appId: "1:177677777560:web:25af3aaae5b11f22592eed",
 };
 // ===========================================
 
