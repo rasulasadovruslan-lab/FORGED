@@ -272,3 +272,40 @@ input.tt{font:700 24px "Chakra Petch",sans-serif;border:0;background:transparent
 nav a.on{animation:navpop .3s cubic-bezier(.2,.8,.2,1)}
 @keyframes navpop{from{transform:scale(.92)}to{transform:none}}
 @media(prefers-reduced-motion:reduce){.sk,#ld.run,nav a.on{animation:none!important}#ld.run{width:60%}}
+
+/* ===== v6: in-site dialogs + phone goals + css checkmarks ===== */
+.mdl{position:fixed;inset:0;z-index:200;display:grid;place-items:center;padding:16px;background:rgba(0,0,0,.55);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);animation:fin .18s ease both}
+.mdl.out{opacity:0;transition:opacity .18s}
+.mbox{width:min(92vw,400px);background:var(--card);border:1px solid var(--line);border-left:2px solid var(--fg);border-radius:10px;padding:20px;display:flex;flex-direction:column;gap:14px;box-shadow:0 20px 60px rgba(0,0,0,.6);animation:mpop .28s cubic-bezier(.2,.8,.2,1) both}
+.mbox h3{margin:0;font-size:20px;letter-spacing:-.5px}
+.mbox p{margin:0;color:var(--mut)}
+.mact{justify-content:flex-end}
+.btn.dng{background:#e5484d;border-color:#e5484d;color:#fff}
+@keyframes fin{from{opacity:0}}
+@keyframes mpop{from{opacity:0;transform:translateY(14px) scale(.96)}}
+@keyframes msheet{from{transform:translateY(100%)}}
+.ck{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:3;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.sheet input[type=checkbox]:checked::after{content:"";width:5px;height:10px;margin-top:-2px;border:solid var(--on);border-width:0 2.5px 2.5px 0;font:0;transform:rotate(45deg);animation:popck .3s cubic-bezier(.2,.8,.2,1)}
+@keyframes popck{0%{transform:rotate(45deg) scale(0)}60%{transform:rotate(45deg) scale(1.4)}100%{transform:rotate(45deg) scale(1)}}
+.gm{display:none}
+.gcard{margin:0 0 12px!important}
+.tdy{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;padding:15px;border-radius:6px;border:1px solid var(--line);background:transparent;color:var(--fg);font:600 16px "Chakra Petch",sans-serif;cursor:pointer;transition:background .2s,color .2s,transform .15s}
+.tdy .ck{opacity:.35}
+.tdy.on{background:var(--accent);color:var(--on);border-color:var(--accent)}
+.tdy.on .ck{opacity:1;animation:pop .3s}
+.tdy:active{transform:scale(.98)}
+.mdays{display:grid;grid-template-columns:repeat(6,1fr);gap:6px}
+.md{aspect-ratio:1;display:grid;place-items:center;border:1px solid var(--line);background:transparent;color:var(--mut);border-radius:6px;font:600 13px "Chakra Petch",sans-serif;padding:0;cursor:pointer;transition:transform .12s,background .15s}
+.md .ck{width:16px;height:16px}
+.md.on{background:var(--accent);color:var(--on);border-color:var(--accent)}
+.md.now{border-color:var(--fg);box-shadow:0 0 0 2px color-mix(in srgb,var(--fg) 30%,transparent)}
+.md:disabled{opacity:.22;cursor:default}
+.md:not(:disabled):active{transform:scale(.88)}
+@media(max-width:700px){
+ .sheet{display:none}
+ .gm{display:block}
+ .mdl{place-items:end center;padding:0}
+ .mbox{width:100%;border-radius:16px 16px 0 0;border-left:1px solid var(--line);padding-bottom:calc(22px + env(safe-area-inset-bottom));animation:msheet .3s cubic-bezier(.2,.8,.2,1) both}
+ .mact .btn{flex:1}
+ .md{font-size:14px}
+}

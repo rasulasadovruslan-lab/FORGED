@@ -154,6 +154,44 @@ const ld = {
     if (b) b.className = "done";
   },
 };
+const CK = '<svg class="ck" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg>';
+const dlg = (o) =>
+  new Promise((res) => {
+    const w = document.createElement("div"),
+      prev = document.activeElement;
+    w.className = "mdl";
+    w.innerHTML = `<div class="mbox" role="dialog" aria-modal="true"><h3>${esc(o.title || "")}</h3>${o.msg ? `<p>${esc(o.msg)}</p>` : ""}${o.input ? `<input id="mi" value="${esc(o.value || "")}" placeholder="${esc(o.ph || "")}" maxlength="40" autocomplete="off">` : ""}<div class="row mact"><button class="btn ghost" data-r="0">${esc(o.cancel || "Cancel")}</button><button class="btn${o.danger ? " dng" : ""}" data-r="1">${esc(o.ok || "OK")}</button></div></div>`;
+    document.body.append(w);
+    const inp = w.querySelector("#mi"),
+      okb = w.querySelector('[data-r="1"]');
+    const done = (v) => {
+      document.removeEventListener("keydown", key, true);
+      w.classList.add("out");
+      setTimeout(() => w.remove(), 180);
+      if (prev && prev.focus) prev.focus();
+      res(v);
+    };
+    const yes = () => done(o.input ? inp.value.trim() || null : true),
+      no = () => done(o.input ? null : false);
+    function key(e) {
+      if (e.key === "Escape") { e.stopPropagation(); no(); }
+      else if (e.key === "Enter" && e.target.tagName !== "BUTTON") { e.preventDefault(); yes(); }
+      else if (e.key === "Tab") {
+        const f = [...w.querySelectorAll("input,button")];
+        const i = f.indexOf(document.activeElement), n = e.shiftKey ? i - 1 : i + 1;
+        e.preventDefault();
+        f[(n + f.length) % f.length].focus();
+      }
+    }
+    document.addEventListener("keydown", key, true);
+    w.onclick = (e) => {
+      if (e.target === w) no();
+      const b = e.target.closest("[data-r]");
+      if (b) b.dataset.r === "1" ? yes() : no();
+    };
+    (inp || okb).focus();
+    if (inp) inp.select();
+  });
 const fit = (t) => {
   t.style.height = "auto";
   t.style.height = Math.max(110, t.scrollHeight) + "px";
@@ -416,7 +454,7 @@ P.goals = () => {
     return d;
   };
   const restart = async () => {
-    if (!confirm("Start a new 30 days? All checkmarks will reset.")) return;
+    if (!(await dlg({ title: "Start a new 30 days?", msg: "All checkmarks reset. Your XP and awards stay.", ok: "Start fresh" }))) return;
     try {
       const ti = tIdx(), t0 = calc(profile, docs, ti),
         bank = { checks: t0.checks, forged: t0.forged, perfect: t0.perfect, cycles: t0.cycles + (ti >= 30 ? 1 : 0), best: t0.best };
@@ -463,6 +501,15 @@ P.goals = () => {
         return `<tr><th class="gn" scope="row"><div class="gc"><div><b>${esc(g.title)}</b><br><small>${p}% · streak ${streak(d, idx)}</small>${p === 100 ? ' <span class="seal">Forged</span>' : ""}</div><button class="x" data-del="${x.id}" title="Delete goal" aria-label="Delete goal">×</button></div></th>${d.map((v, i) => `<td class="${i === idx ? "today" : ""}"><input type="checkbox" data-g="${x.id}" data-i="${i}" ${v == 1 ? "checked" : ""} ${i > idx ? "disabled" : ""} aria-label="${esc(g.title)} day ${i + 1}"></td>`).join("")}</tr>`;
       })
       .join("");
+    const cards = docs
+      .map((x) => {
+        const g = x.data(),
+          d = Array.from({ length: 30 }, (_, i) => ((g.d || [])[i] == 1 ? 1 : 0)),
+          p = Math.round((d.reduce((a, v) => a + v, 0) / 30) * 100),
+          td = idx >= 0 && idx < 30 ? d[idx] : null;
+        return `<div class="card gcard"><div class="row sb"><div><b>${esc(g.title)}</b><br><small>${p}% · streak ${streak(d, idx)}</small></div><button class="x" data-del="${x.id}" aria-label="Delete goal">×</button></div>${td === null ? "" : `<button class="tdy${td ? " on" : ""}" data-g="${x.id}" data-i="${idx}">${CK}<span>${td ? "Done today" : "Mark today done"}</span></button>`}<div class="mdays">${d.map((v, i) => `<button class="md${v ? " on" : ""}${i === idx ? " now" : ""}" data-g="${x.id}" data-i="${i}" ${i > idx ? "disabled" : ""} aria-label="Day ${i + 1}">${v ? CK : i + 1}</button>`).join("")}</div></div>`;
+      })
+      .join("");
     const banner =
       idx >= 30
         ? `<div class="card"><b>30 days complete.</b><small>Check your report, then start fresh when you're ready.</small><div class="row"><button class="btn" id="rs2">Start new 30 days</button><a class="btn ghost" href="report.html">View report</a></div></div>`
@@ -470,7 +517,7 @@ P.goals = () => {
     $("#gl").innerHTML =
       banner +
       (n
-        ? `<div class="sheet"><table><thead><tr><th class="gn">Goal</th>${head}</tr></thead><tbody>${rows}</tbody></table></div>`
+        ? `<div class="sheet"><table><thead><tr><th class="gn">Goal</th>${head}</tr></thead><tbody>${rows}</tbody></table></div><div class="gm">${cards}</div>`
         : '<p class="muted">No goals yet. Add your first one above.</p>');
     const sh = $(".sheet");
     if (sh) sh.scrollLeft = sl === null ? Math.max(0, idx * 36 - 140) : sl;
@@ -545,24 +592,30 @@ P.goals = () => {
     },
     onErr,
   );
-  $("#gl").onclick = (e) => {
+  const setDay = (gid, i, v, undo) => {
+    const x = docs.find((y) => y.id === gid);
+    if (!x) return;
+    const d = Array.from({ length: 30 }, (_, k) => ((x.data().d || [])[k] == 1 ? 1 : 0));
+    d[i] = v === undefined ? 1 - d[i] : v;
+    if (navigator.vibrate) navigator.vibrate(12);
+    updateDoc(x.ref, { d }).catch((y) => {
+      if (undo) undo();
+      toast(err(y));
+    });
+  };
+  $("#gl").onclick = async (e) => {
     const b = e.target.closest("button");
     if (!b) return;
     if (b.id === "rs2") return restart();
-    if (b.dataset.del && confirm("Delete this goal and its checkmarks?"))
+    if (b.dataset.g) return setDay(b.dataset.g, +b.dataset.i);
+    if (b.dataset.del && (await dlg({ title: "Delete this goal?", msg: "Its checkmarks will be removed too.", ok: "Delete", danger: true })))
       deleteDoc(doc(col, b.dataset.del)).catch((x) => toast(err(x)));
   };
   $("#gl").onchange = (e) => {
     const c = e.target;
     if (!c.dataset || !c.dataset.g) return;
-    const x = docs.find((y) => y.id === c.dataset.g);
-    if (!x) return;
-    const d = Array.from({ length: 30 }, (_, i) => ((x.data().d || [])[i] == 1 ? 1 : 0));
-    d[+c.dataset.i] = c.checked ? 1 : 0;
-    updateDoc(x.ref, { d }).catch((y) => {
-      c.checked = !c.checked;
-      toast(err(y));
-    });
+    if (c.type !== "checkbox") return;
+    setDay(c.dataset.g, +c.dataset.i, c.checked ? 1 : 0, () => (c.checked = !c.checked));
   };
 };
 
@@ -643,8 +696,8 @@ P.notes = () => {
     drawF();
     drawN();
   }, onErr);
-  $("#nf").onclick = () => {
-    const n = (prompt("Folder name") || "").trim();
+  $("#nf").onclick = async () => {
+    const n = (await dlg({ input: true, title: "New folder", ph: "Folder name", ok: "Create" })) || "";
     if (n) addDoc(fc, { name: n.slice(0, 30), at: serverTimestamp() }).catch(onErr);
   };
   $("#fo").onclick = (e) => {
@@ -653,10 +706,10 @@ P.notes = () => {
   };
   $("#fa").onclick = async (e) => {
     if (e.target.id === "fr") {
-      const n = (prompt("Rename folder", F.find((f) => f.id === cur).data().name) || "").trim();
+      const n = (await dlg({ input: true, title: "Rename folder", value: F.find((f) => f.id === cur).data().name, ok: "Rename" })) || "";
       if (n) updateDoc(doc(fc, cur), { name: n.slice(0, 30) }).catch(onErr);
     }
-    if (e.target.id === "fd" && confirm("Delete this folder? Its notes move to Unfiled.")) {
+    if (e.target.id === "fd" && (await dlg({ title: "Delete this folder?", msg: "Its notes move to Unfiled.", ok: "Delete", danger: true }))) {
       const id = cur;
       cur = "all";
       await Promise.all(Object.entries(N).filter(([, n]) => n.folder === id).map(([k]) => updateDoc(doc(nc, k), { folder: "" })));
@@ -678,8 +731,8 @@ P.notes = () => {
     if (b) open(b.dataset.n);
   };
   $("#bk").onclick = () => { flush(); $("#nb").classList.remove("open"); };
-  $("#nd").onclick = () => {
-    if (!sel || !confirm("Delete this note?")) return;
+  $("#nd").onclick = async () => {
+    if (!sel || !(await dlg({ title: "Delete this note?", msg: "This cannot be undone.", ok: "Delete", danger: true }))) return;
     const id = sel;
     clearTimeout(tm);
     shut();
@@ -943,7 +996,7 @@ P.settings = () => {
     ($("#dx").disabled = !($("#dp").value && $("#dc").value.trim() === "DELETE"));
   $("#dp").oninput = $("#dc").oninput = ready;
   $("#dx").onclick = async () => {
-    if (!confirm("Last chance: permanently delete your account and all your data?")) return;
+    if (!(await dlg({ title: "Delete your account?", msg: "Your goals, notes, friends and profile will be permanently erased. This cannot be undone.", ok: "Delete forever", danger: true }))) return;
     const b = $("#dx");
     b.disabled = true;
     try {
@@ -1164,7 +1217,7 @@ setInterval(() => {
 }, 60000);
 
 document.addEventListener("pointerdown", (e) => {
-  const b = e.target.closest(".btn,nav a,.menu a,.menu button,.nt,.fo,.tb button");
+  const b = e.target.closest(".btn,nav a,.menu a,.menu button,.nt,.fo,.tb button,.tdy");
   if (!b) return;
   const r = b.getBoundingClientRect(), z = Math.max(r.width, r.height) * 2, i = document.createElement("i");
   i.className = "rip";
