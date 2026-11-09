@@ -25,6 +25,7 @@ import {
   onSnapshot,
   serverTimestamp,
   deleteField,
+  writeBatch,
 } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
 // ===== PASTE YOUR FIREBASE CONFIG HERE =====
@@ -56,10 +57,19 @@ const esc = (s) =>
       ],
   );
 const toast = (t) => {
+  // toasts live in one stack so several can show at once without overlapping
+  let c = $("#tc");
+  if (!c) {
+    c = document.createElement("div");
+    c.id = "tc";
+    c.setAttribute("role", "status");
+    c.setAttribute("aria-live", "polite");
+    document.body.append(c);
+  }
   const e = document.createElement("div");
   e.className = "toast";
   e.textContent = t;
-  document.body.append(e);
+  c.append(e);
   setTimeout(() => e.remove(), 3000);
 };
 const err = (e) =>
@@ -211,8 +221,25 @@ const count = (el, to) => {
     if (k < 1) requestAnimationFrame(s);
   })(t0);
 };
+/* ===== Roads =====
+   A "road" is one goal with its own length (1-365 days) and its own start date.
+   Goals saved before v7 have neither field: they fall back to 30 days and the
+   shared cycle start, so old data keeps working untouched. */
+const DAY = 864e5,
+  DEF_DAYS = 30,
+  MAX_DAYS = 365,
+  PRESETS = [7, 14, 21, 30, 60, 90];
+const D0 = (s) => new Date(s + "T00:00:00");
+const midnight = () => {
+  const t = new Date();
+  t.setHours(0, 0, 0, 0);
+  return t;
+};
+const clampDays = (v) => Math.min(MAX_DAYS, Math.max(1, Math.round(+v) || DEF_DAYS));
+const sum = (a) => a.reduce((p, c) => p + c, 0);
+const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
 const streak = (d, idx) => {
-  const e = Math.min(idx, 29);
+  const e = Math.min(idx, d.length - 1);
   let s = 0;
   for (let i = e; i >= 0; i--) {
     if (d[i] == 1) s++;
@@ -224,12 +251,119 @@ const streak = (d, idx) => {
 const bestRun = (d) => {
   let b = 0,
     c = 0;
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < d.length; i++) {
     if (d[i] == 1) b = Math.max(b, ++c);
     else c = 0;
   }
   return b;
 };
+
+/* Banner rewards: the longer the road, the rarer the banner. */
+const BN = [
+  [1, "UNLOCKED", "01_UNLOCKED.png"],
+  [4, "ELITE", "02_ELITE.png"],
+  [7, "NO EXCUSES", "03_NO_EXCUSES.png"],
+  [10, "CONSISTENT", "04_CONSISTENT.png"],
+  [14, "FORGED", "05_FORGED.png"],
+  [21, "ASCEND", "06_ASCEND.png"],
+  [30, "BREAK LIMITS", "07_BREAK_LIMITS.png"],
+  [45, "UNSTOPPABLE", "08_UNSTOPPABLE.png"],
+  [60, "OVERCOME", "09_OVERCOME.png"],
+  [90, "LEGEND", "10_LEGEND.png"],
+].map(([min, name, file], i) => ({ id: String(i + 1).padStart(2, "0"), min, name, file }));
+const tierOf = (n) => BN.reduce((a, b) => (n >= b.min ? b : a), BN[0]);
+const bnSrc = (b) => "banners/" + b.file;
+const bnRange = (i) => {
+  const b = BN[i],
+    nx = BN[i + 1];
+  if (!nx) return `Road of ${b.min}+ days`;
+  return nx.min - 1 === b.min ? `Road of ${b.min} day${b.min === 1 ? "" : "s"}` : `Road of ${b.min}-${nx.min - 1} days`;
+};
+const forgedXp = (n) => Math.round((200 * n) / 30); // 200 XP at 30 days, scaled by length
+const bankFxp = (b) => (b.fxp != null ? b.fxp : (b.forged || 0) * 200);
+
+/* Turn a goal document into everything the UI needs. */
+const road = (x, cs) => {
+  const g = x.data(),
+    n = g.days ? clampDays(g.days) : DEF_DAYS,
+    from = g.from || cs || ds(new Date()),
+    d = Array.from({ length: n }, (_, i) => ((g.d || [])[i] == 1 ? 1 : 0)),
+    idx = Math.round((midnight() - D0(from)) / DAY),
+    done = sum(d),
+    past = Math.min(Math.max(idx, 0), n),
+    donePast = sum(d.slice(0, past));
+  return {
+    id: x.id,
+    ref: x.ref,
+    title: g.title || "Untitled",
+    n,
+    from,
+    d,
+    idx,
+    done,
+    past,
+    donePast,
+    missed: past - donePast,
+    p: Math.round((done / n) * 100),
+    full: done === n,
+    over: idx >= n,
+    cur: streak(d, idx),
+    best: bestRun(d),
+    tier: tierOf(n),
+  };
+};
+const dateOf = (r, i) => {
+  const d = D0(r.from);
+  d.setDate(d.getDate() + i);
+  return d.toDateString();
+};
+/* A perfect day = a calendar day on which every road that was running was checked. */
+function perfectDays(R) {
+  if (!R.length) return 0;
+  const from = R.map((r) => D0(r.from)),
+    base = new Date(Math.min(...from)),
+    end = midnight();
+  if (isNaN(base)) return 0;
+  let n = 0;
+  for (let k = 0; k < 4000; k++) {
+    const dt = new Date(base);
+    dt.setDate(base.getDate() + k);
+    if (dt > end) break;
+    let act = 0,
+      ok = 0;
+    R.forEach((r, j) => {
+      const i = Math.round((dt - from[j]) / DAY);
+      if (i >= 0 && i < r.n) {
+        act++;
+        ok += r.d[i];
+      }
+    });
+    if (act && act === ok) n++;
+  }
+  return n;
+}
+/* Add finished stats to the bank so XP survives a restart or a deleted road. */
+const bankWith = (b, list, perfectGain) => ({
+  checks: (b.checks || 0) + sum(list.map((r) => r.done)),
+  forged: (b.forged || 0) + list.filter((r) => r.full).length,
+  fxp: bankFxp(b) + sum(list.filter((r) => r.full).map((r) => forgedXp(r.n))),
+  perfect: (b.perfect || 0) + perfectGain,
+  cycles: (b.cycles || 0) + list.filter((r) => r.over).length,
+  best: Math.max(b.best || 0, ...list.map((r) => r.best)),
+});
+/* Instant jumps even though the page and the sheet use smooth scrolling. */
+const jump = (el, left) => {
+  el.style.scrollBehavior = "auto";
+  el.scrollLeft = left;
+  el.style.scrollBehavior = "";
+};
+const toTop = () => {
+  const r = document.documentElement;
+  r.style.scrollBehavior = "auto";
+  scrollTo(0, 0);
+  r.style.scrollBehavior = "";
+};
+console.info("Forged build v7");
 const lvOf = (xp) => Math.floor(Math.sqrt(xp / 50)) + 1,
   lvStart = (l) => 50 * (l - 1) ** 2,
   RANKS = ["Wanderer", "Walker", "Traveler", "Pathfinder", "Trailblazer", "Forger", "Ironbound", "Warden", "Champion", "Legend"],
@@ -252,40 +386,44 @@ const AW = [
   ["str30", "👑", "Unbroken", "30-day streak", "#ffd700", (t) => t.best >= 30],
   ["perf", "🌟", "Perfect Day", "Check every goal in one day", "#f472b6", (t) => t.perfect >= 1],
   ["flaw", "💎", "Flawless", "7 perfect days", "#22d3ee", (t) => t.perfect >= 7],
-  ["forge", "🛡️", "Forged", "Complete a goal 30/30", "#c0c7d1", (t) => t.forged >= 1],
+  ["forge", "🛡️", "Forged", "Check off every day of a road", "#c0c7d1", (t) => t.forged >= 1],
   ["multi", "🧩", "Multitasker", "Run 3 goals at once", "#818cf8", (t) => t.goals >= 3],
-  ["cycle", "🏁", "Road Finisher", "Finish a full 30 days", "#34d399", (t) => t.cycles >= 1],
+  ["cycle", "🏁", "Road Finisher", "Run a road to its last day", "#34d399", (t) => t.cycles >= 1],
   ["scribe", "📝", "Scribe", "Write your first note", "#fbbf24", (t, x) => x.notes >= 1],
   ["org", "📁", "Organizer", "Create a folder", "#fb923c", (t, x) => x.folders >= 1],
   ["pal", "🤝", "Companion", "Make a friend", "#60a5fa", (t, x) => x.friends >= 1],
 ];
-function calc(p, docs, idx) {
-  const b = p.bank || {},
-    ds_ = docs.map((x) => Array.from({ length: 30 }, (_, i) => ((x.data().d || [])[i] == 1 ? 1 : 0)));
-  let checks = 0, forged = 0, best = 0, perfect = 0;
-  ds_.forEach((d) => {
-    const c = d.reduce((a, v) => a + v, 0);
-    checks += c;
-    if (c === 30) forged++;
-    best = Math.max(best, bestRun(d));
-  });
-  if (ds_.length) for (let i = 0; i <= Math.min(idx, 29); i++) if (ds_.every((d) => d[i])) perfect++;
-  const t = {
-    checks: checks + (b.checks || 0), forged: forged + (b.forged || 0), perfect: perfect + (b.perfect || 0),
-    cycles: b.cycles || 0, best: Math.max(best, b.best || 0), goals: docs.length,
-  };
-  t.xp = t.checks * 10 + t.perfect * 30 + t.forged * 200 + t.cycles * 100;
+function calc(p, R) {
+  const b = p.bank || {};
+  const forgedNow = R.filter((r) => r.full),
+    t = {
+      checks: sum(R.map((r) => r.done)) + (b.checks || 0),
+      forged: forgedNow.length + (b.forged || 0),
+      perfect: perfectDays(R) + (b.perfect || 0),
+      cycles: R.filter((r) => r.over).length + (b.cycles || 0),
+      best: Math.max(...R.map((r) => r.best), b.best || 0),
+      goals: R.length,
+      banners: [...new Set(forgedNow.map((r) => r.tier.id))],
+    };
+  t.xp = t.checks * 10 + t.perfect * 30 + sum(forgedNow.map((r) => forgedXp(r.n))) + bankFxp(b) + t.cycles * 100;
   t.lv = lvOf(t.xp);
   return t;
 }
 function grant(t, x) {
   const have = new Set(profile.awards || []),
     nw = AW.filter((a) => !have.has(a[0]) && a[5](t, x)),
+    hb = new Set(profile.banners || []),
+    nb = BN.filter((b) => t.banners.includes(b.id) && !hb.has(b.id)),
     patch = {};
   if (nw.length) {
     profile.awards = [...have, ...nw.map((a) => a[0])];
     patch.awards = profile.awards;
     toast("Award unlocked: " + nw.map((a) => a[2]).join(", "));
+  }
+  if (nb.length) {
+    profile.banners = [...hb, ...nb.map((b) => b.id)];
+    patch.banners = profile.banners;
+    toast("Banner earned: " + nb.map((b) => b.name).join(", "));
   }
   if (t.lv > (profile.lvl || 1)) {
     if (profile.lvl) toast("Level up! You are Lv " + t.lv);
@@ -432,116 +570,205 @@ P.auth = () => {
   };
 };
 
+/* ---- shared pieces for road UI ---- */
+const LOCK = '<svg class="ck" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg>';
+const RS_IC = '<svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 109-9 9 9 0 00-6.4 2.6L3 8M3 3v5h5"/></svg>';
+const RC = 2 * Math.PI * 15;
+/* Small progress ring: green = done, red = missed, grey = still to go. */
+const ring = (r) => {
+  const ok = (RC * r.done) / r.n,
+    miss = (RC * r.missed) / r.n,
+    tip = `${r.done} done · ${r.missed} missed · ${Math.max(r.n - r.done - r.missed, 0)} to go`;
+  return `<svg class="mr${r.full ? " full" : ""}" viewBox="0 0 36 36" role="img" aria-label="${r.p}% complete: ${tip}"><title>${tip}</title><g transform="rotate(-90 18 18)"><circle class="mt" cx="18" cy="18" r="15"/><circle class="mm" cx="18" cy="18" r="15" stroke-dasharray="${miss} ${RC}" stroke-dashoffset="${-ok}"/><circle class="mo" cx="18" cy="18" r="15" stroke-dasharray="${ok} ${RC}"/></g>${r.full ? '<path class="mk" d="M12 18.5l4 4 8-9"/>' : `<text x="18" y="21.3">${r.p}%</text>`}</svg>`;
+};
+const roadStat = (r) =>
+  r.full
+    ? "Forged"
+    : r.idx < 0
+      ? `Starts in ${plural(-r.idx, "day")}`
+      : r.over
+        ? `Ended · ${r.missed} missed`
+        : `Day ${r.idx + 1} of ${r.n}`;
+/* A banner that fills in with colour as the road progresses. */
+const bnFig = (b, p, got, cap, cls = "") =>
+  `<figure class="rw${got ? " got" : ""}${cls}" style="--p:${p}%"><div class="rwi"><img class="base" src="${bnSrc(b)}" alt="" width="760" height="130" loading="lazy" decoding="async"><img class="fill" src="${bnSrc(b)}" alt="${got ? esc(b.name) + " banner" : ""}" width="760" height="130" loading="lazy" decoding="async"><span class="rwb" aria-hidden="true">${got ? CK : LOCK}</span></div><figcaption>${cap}</figcaption></figure>`;
+const rewardTile = (r) => {
+  const left = r.n - r.done;
+  return bnFig(
+    r.tier,
+    r.p,
+    r.full,
+    `<div><b>${r.tier.name}</b><small>${r.full ? "Reward unlocked" : `${plural(left, "more day")} to unlock`}</small></div>`,
+  );
+};
+const roadActions = (r) =>
+  `<button class="ib" data-rs="${r.id}" title="Restart road" aria-label="Restart ${esc(r.title)}">${RS_IC}</button><button class="x" data-del="${r.id}" title="Delete goal" aria-label="Delete ${esc(r.title)}">×</button>`;
+const lastDays = () => {
+  try {
+    return clampDays(localStorage.gd);
+  } catch {
+    return DEF_DAYS;
+  }
+};
+
 P.goals = () => {
-  m().innerHTML = `<div class="row sb"><h2>Your goals</h2><button class="link" id="rs">Restart 30 days</button></div>
+  m().innerHTML = `<div class="row sb"><h2>Your goals</h2><button class="link" id="rsa">Restart all</button></div>
  <div class="card gauge"><div class="ring"><svg viewBox="0 0 220 220" aria-hidden="true"><circle class="tr" cx="110" cy="110" r="90"/><circle class="no" id="rg2" cx="110" cy="110" r="90" stroke-dasharray="0 999"/><circle class="ok" id="rg1" cx="110" cy="110" r="90" stroke-dasharray="0 999"/></svg><div class="rc"><span id="all">0%</span><small id="cyc"></small></div></div>
  <small id="lg"></small>
  <div class="meters"><div><div class="row sb"><b>Success</b><b id="ms">-</b></div><div class="bar"><i id="mb1" style="width:0"></i></div></div><div><div class="row sb"><b>Fail</b><b id="mf">-</b></div><div class="bar fail"><i id="mb2" style="width:0"></i></div></div></div></div>
- <form id="gf" class="row card" style="flex-direction:row"><input id="gt" placeholder="Add a goal, e.g. Read 20 pages" required maxlength="60"><button class="btn">Add</button></form><div id="gl">${sk(4, 52)}</div>`;
-  const col = collection(db, "users", me.uid, "goals");
+ <form id="gf" class="card gform" autocomplete="off">
+  <div class="gfr"><input id="gt" placeholder="Add a goal, e.g. Code for 1 hour" required maxlength="60" aria-label="Goal name"><div class="dayin"><button type="button" class="st" data-st="-1" aria-label="Fewer days">−</button><input id="gd" type="number" inputmode="numeric" min="1" max="${MAX_DAYS}" value="${lastDays()}" aria-label="Number of days"><button type="button" class="st" data-st="1" aria-label="More days">+</button><span>days</span></div><button class="btn">Add</button></div>
+  <div class="gfr2"><div class="presets" role="group" aria-label="Quick lengths">${PRESETS.map((n) => `<button type="button" class="fo pre" data-n="${n}">${n} days</button>`).join("")}</div><div class="prev" id="gp"></div></div>
+ </form><div id="gl">${sk(4, 52)}</div>`;
+  const col = collection(db, "users", me.uid, "goals"),
+    gd = $("#gd");
   let cs = profile.cycleStart || "",
     docs = [],
+    R = [],
     firstDraw = true;
-  const D0 = (s) => new Date(s + "T00:00:00");
-  const tIdx = () => {
-    const t = new Date();
-    t.setHours(0, 0, 0, 0);
-    return Math.round((t - D0(cs)) / 864e5);
+
+  /* ---- add form: day picker + live reward preview ---- */
+  const paint = () => {
+    const n = clampDays(gd.value),
+      b = tierOf(n);
+    document.querySelectorAll(".pre").forEach((c) => c.classList.toggle("on", +c.dataset.n === n));
+    $("#gp").innerHTML = `<img src="${bnSrc(b)}" alt="" width="120" height="21"><small>Finish all ${plural(n, "day")} to earn <b>${b.name}</b></small>`;
   };
-  const dayDate = (i) => {
-    const d = D0(cs);
-    d.setDate(d.getDate() + i);
-    return d;
+  const setN = (v) => {
+    gd.value = clampDays(v);
+    paint();
   };
-  const restart = async () => {
-    if (!(await dlg({ title: "Start a new 30 days?", msg: "All checkmarks reset. Your XP and awards stay.", ok: "Start fresh" }))) return;
+  gd.oninput = paint;
+  gd.onchange = () => setN(gd.value);
+  $("#gf").onclick = (e) => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    if (b.dataset.n) setN(b.dataset.n);
+    else if (b.dataset.st) setN((+gd.value || DEF_DAYS) + +b.dataset.st);
+  };
+  paint();
+
+  /* ---- restart ---- */
+  const restartRoad = async (id) => {
+    const r = R.find((y) => y.id === id);
+    if (!r) return;
+    if (
+      !(await dlg({
+        title: `Restart "${r.title}"?`,
+        msg: "Its checkmarks reset and the road starts again today. Your XP, awards and banners stay.",
+        ok: "Restart road",
+      }))
+    )
+      return;
     try {
-      const ti = tIdx(), t0 = calc(profile, docs, ti),
-        bank = { checks: t0.checks, forged: t0.forged, perfect: t0.perfect, cycles: t0.cycles + (ti >= 30 ? 1 : 0), best: t0.best };
-      cs = ds(new Date());
-      profile.cycleStart = cs;
+      const today = ds(new Date()),
+        fresh = R.map((y) => (y.id === id ? { ...y, from: today, d: Array(y.n).fill(0) } : y)),
+        gain = Math.max(0, perfectDays(R) - perfectDays(fresh)),
+        bank = bankWith(profile.bank || {}, [r], gain),
+        bt = writeBatch(db);
+      bt.update(doc(db, "users", me.uid), { bank });
+      bt.update(r.ref, { from: today, d: Array(r.n).fill(0) });
+      await bt.commit();
       profile.bank = bank;
-      await updateDoc(doc(db, "users", me.uid), { cycleStart: cs, bank });
-      await Promise.all(
-        docs.map((x) => updateDoc(x.ref, { d: Array(30).fill(0) })),
-      );
-      toast("New 30 days started");
+      toast("Road restarted");
     } catch (x) {
       toast(err(x));
     }
   };
-  $("#rs").onclick = restart;
+  const restartAll = async () => {
+    if (!R.length) return toast("No roads to restart yet");
+    if (
+      !(await dlg({
+        title: "Restart every road?",
+        msg: "All checkmarks reset and each road starts again today. Your XP, awards and banners stay.",
+        ok: "Restart all",
+      }))
+    )
+      return;
+    try {
+      const today = ds(new Date()),
+        bank = bankWith(profile.bank || {}, R, perfectDays(R)),
+        bt = writeBatch(db);
+      bt.update(doc(db, "users", me.uid), { cycleStart: today, bank });
+      R.forEach((r) => bt.update(r.ref, { from: today, d: Array(r.n).fill(0) }));
+      await bt.commit();
+      cs = profile.cycleStart = today;
+      profile.bank = bank;
+      toast("All roads restarted");
+    } catch (x) {
+      toast(err(x));
+    }
+  };
+  $("#rsa").onclick = restartAll;
+
+  /* ---- add a road ---- */
   $("#gf").onsubmit = async (e) => {
     e.preventDefault();
-    const t = $("#gt").value.trim();
+    const t = $("#gt").value.trim(),
+      n = clampDays(gd.value);
     if (!t) return;
     try {
-      await addDoc(col, { title: t, d: Array(30).fill(0), at: serverTimestamp() });
+      await addDoc(col, { title: t, days: n, from: ds(new Date()), d: Array(n).fill(0), at: serverTimestamp() });
+      try {
+        localStorage.gd = n;
+      } catch {}
       $("#gt").value = "";
+      toast(`Road started: ${plural(n, "day")}`);
     } catch (x) {
       toast(err(x));
     }
   };
+
   const draw = () => {
-    const idx = tIdx(),
-      n = docs.length,
+    R = docs.map((x) => road(x, cs)).sort((a, b) => a.n - b.n); // shortest roads first
+    const n = R.length,
+      max = Math.max(0, ...R.map((r) => r.n)),
       old = $(".sheet"),
       sl = old ? old.scrollLeft : null;
-    let sum = 0;
-    const head = Array.from({ length: 30 }, (_, i) => {
-      const dt = dayDate(i);
-      return `<th class="dh${i === idx ? " today" : ""}" title="${dt.toDateString()}"><b>${i + 1}</b><small>${dt.getDate()}</small></th>`;
+    const head =
+      '<th class="gn">Goal</th>' +
+      Array.from({ length: max }, (_, i) => `<th class="dh"><b>${i + 1}</b></th>`).join("") +
+      '<th class="dh endh">Progress</th>';
+    const rows = R.map((r) => {
+      const cells = r.d
+        .map(
+          (v, i) =>
+            `<td class="${i === r.idx ? "today" : ""}" title="${dateOf(r, i)}"><input type="checkbox" data-g="${r.id}" data-i="${i}" ${v ? "checked" : ""} ${i > r.idx ? "disabled" : ""} aria-label="${esc(r.title)} day ${i + 1}"></td>`,
+        )
+        .join("");
+      return `<tr class="${r.full ? "fin" : ""}"><th class="gn" scope="row"><div class="gc"><div class="gi"><b>${esc(r.title)}</b><div class="gmeta"><span class="chip">${plural(r.n, "day")}</span><small>${r.p}% · streak ${r.cur}</small></div></div><div class="gact">${roadActions(r)}</div></div></th>${cells}<td class="end" colspan="${max - r.n + 1}"><div class="endc">${ring(r)}<div class="endt"><b>${r.done}/${r.n}</b><small>${roadStat(r)}</small></div>${r.over ? `<button class="btn ghost sm" data-rs="${r.id}">Restart</button>` : ""}</div></td></tr>`;
     }).join("");
-    const rows = docs
-      .map((x) => {
-        const g = x.data(),
-          d = Array.from({ length: 30 }, (_, i) => (g.d || [])[i]),
-          p = Math.round((d.filter((v) => v == 1).length / 30) * 100);
-        sum += p;
-        return `<tr><th class="gn" scope="row"><div class="gc"><div><b>${esc(g.title)}</b><br><small>${p}% · streak ${streak(d, idx)}</small>${p === 100 ? ' <span class="seal">Forged</span>' : ""}</div><button class="x" data-del="${x.id}" title="Delete goal" aria-label="Delete goal">×</button></div></th>${d.map((v, i) => `<td class="${i === idx ? "today" : ""}"><input type="checkbox" data-g="${x.id}" data-i="${i}" ${v == 1 ? "checked" : ""} ${i > idx ? "disabled" : ""} aria-label="${esc(g.title)} day ${i + 1}"></td>`).join("")}</tr>`;
-      })
-      .join("");
-    const cards = docs
-      .map((x) => {
-        const g = x.data(),
-          d = Array.from({ length: 30 }, (_, i) => ((g.d || [])[i] == 1 ? 1 : 0)),
-          p = Math.round((d.reduce((a, v) => a + v, 0) / 30) * 100),
-          td = idx >= 0 && idx < 30 ? d[idx] : null;
-        return `<div class="card gcard"><div class="row sb"><div><b>${esc(g.title)}</b><br><small>${p}% · streak ${streak(d, idx)}</small></div><button class="x" data-del="${x.id}" aria-label="Delete goal">×</button></div>${td === null ? "" : `<button class="tdy${td ? " on" : ""}" data-g="${x.id}" data-i="${idx}">${CK}<span>${td ? "Done today" : "Mark today done"}</span></button>`}<div class="mdays">${d.map((v, i) => `<button class="md${v ? " on" : ""}${i === idx ? " now" : ""}" data-g="${x.id}" data-i="${i}" ${i > idx ? "disabled" : ""} aria-label="Day ${i + 1}">${v ? CK : i + 1}</button>`).join("")}</div></div>`;
-      })
-      .join("");
-    const banner =
-      idx >= 30
-        ? `<div class="card"><b>30 days complete.</b><small>Check your report, then start fresh when you're ready.</small><div class="row"><button class="btn" id="rs2">Start new 30 days</button><a class="btn ghost" href="report.html">View report</a></div></div>`
-        : "";
-    $("#gl").innerHTML =
-      banner +
-      (n
-        ? `<div class="sheet"><table><thead><tr><th class="gn">Goal</th>${head}</tr></thead><tbody>${rows}</tbody></table></div><div class="gm">${cards}</div>`
-        : '<p class="muted">No goals yet. Add your first one above.</p>');
+    const cards = R.map((r) => {
+      const td = r.idx >= 0 && r.idx < r.n ? r.d[r.idx] : null;
+      return `<div class="card gcard"><div class="row sb"><div class="gi"><b>${esc(r.title)}</b><div class="gmeta"><span class="chip">${plural(r.n, "day")}</span><small>${r.p}% · streak ${r.cur}</small></div><small>${roadStat(r)}</small></div><div class="gact">${roadActions(r)}</div></div>${
+        r.over
+          ? `<button class="btn ghost" data-rs="${r.id}">Restart road</button>`
+          : td === null
+            ? ""
+            : `<button class="tdy${td ? " on" : ""}" data-g="${r.id}" data-i="${r.idx}">${CK}<span>${td ? "Done today" : "Mark today done"}</span></button>`
+      }<div class="mdays">${r.d.map((v, i) => `<button class="md${v ? " on" : ""}${i === r.idx ? " now" : ""}" data-g="${r.id}" data-i="${i}" ${i > r.idx ? "disabled" : ""} aria-label="Day ${i + 1}">${v ? CK : i + 1}</button>`).join("")}<div class="mend">${ring(r)}</div></div>${rewardTile(r)}</div>`;
+    }).join("");
+    const shelf = `<section class="rws"><h3>Road rewards</h3><div class="rwg">${R.map((r) => `<div class="rwc"><div class="rwh"><b>${esc(r.title)}</b><small>${plural(r.n, "day")}</small></div>${rewardTile(r)}</div>`).join("")}</div></section>`;
+    $("#gl").innerHTML = n
+      ? `<div class="sheet"><table><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table></div><div class="gm">${cards}</div>${shelf}`
+      : '<p class="muted">No goals yet. Name a goal, pick how many days it runs, and add your first road above.</p>';
     const sh = $(".sheet");
-    if (sh) sh.scrollLeft = sl === null ? Math.max(0, idx * 36 - 140) : sl;
-    $("#cyc").textContent =
-      idx >= 30
-        ? "overall · cycle finished"
-        : idx < 0
-          ? "overall · starts " + cs
-          : `overall · Day ${idx + 1} of 30 · ${dayDate(idx).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}`;
+    if (sh) {
+      const live = R.filter((r) => !r.over && r.idx >= 0),
+        focus = live.length ? Math.min(...live.map((r) => r.idx)) : 0;
+      jump(sh, sl === null ? Math.max(0, focus * 36 - 40) : sl);
+    }
+    const today = new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" }),
+      running = R.filter((r) => !r.over).length;
+    $("#cyc").textContent = `overall · ${today}${n ? ` · ${running} running` : ""}`;
+
     // big ring + success/fail meters
     const C = 2 * Math.PI * 90,
-      total = n * 30,
-      past = Math.min(Math.max(idx, 0), 30);
-    let done = 0,
-      donePast = 0;
-    docs.forEach((x) => {
-      const d = x.data().d || [];
-      for (let i = 0; i < 30; i++)
-        if (d[i] == 1) {
-          done++;
-          if (i < past) donePast++;
-        }
-    });
-    const missed = n * past - donePast,
+      total = sum(R.map((r) => r.n)),
+      done = sum(R.map((r) => r.done)),
+      missed = sum(R.map((r) => r.missed)),
+      past = sum(R.map((r) => r.past)),
+      donePast = sum(R.map((r) => r.donePast)),
       seg = (id, from, len) => {
         const c = $(id);
         c.setAttribute("stroke-dasharray", `${total ? (C * len) / total : 0} ${C}`);
@@ -549,16 +776,16 @@ P.goals = () => {
       };
     seg("#rg1", 0, done);
     seg("#rg2", done, missed);
-    const hit = n * past ? Math.round((donePast / (n * past)) * 100) : null;
+    const hit = past ? Math.round((donePast / past) * 100) : null;
     $("#ms").textContent = hit === null ? "-" : hit + "%";
     $("#mf").textContent = hit === null ? "-" : 100 - hit + "%";
     $("#mb1").style.width = (hit || 0) + "%";
     $("#mb2").style.width = (hit === null ? 0 : 100 - hit) + "%";
     $("#lg").textContent = `${done} done · ${missed} missed · ${Math.max(total - done - missed, 0)} to go`;
-    const all = n ? Math.round(sum / n) : 0,
+    const all = n ? Math.round(sum(R.map((r) => r.p)) / n) : 0,
       dl = firstDraw ? (document.documentElement.classList.contains("quick") ? 250 : 900) : 0;
     firstDraw = false;
-    if (cs) grant(calc(profile, docs, idx), { notes: 0, folders: 0, friends: 0 });
+    if (cs) grant(calc(profile, R), { notes: 0, folders: 0, friends: 0 });
     setTimeout(() => $("#all") && count($("#all"), all), dl);
     if (profile.pct !== all) {
       profile.pct = all;
@@ -571,8 +798,10 @@ P.goals = () => {
       docs = s.docs;
       if (!cs) {
         cs =
-          docs.map((x) => x.data().start).filter(Boolean).sort()[0] ||
-          ds(new Date());
+          docs
+            .map((x) => x.data().start)
+            .filter(Boolean)
+            .sort()[0] || ds(new Date());
         profile.cycleStart = cs;
         updateDoc(doc(db, "users", me.uid), { cycleStart: cs }).catch(() => {});
       }
@@ -580,11 +809,9 @@ P.goals = () => {
       docs.forEach((x) => {
         const g = x.data();
         if (!g.start) return;
-        const off = Math.max(0, Math.round((D0(g.start) - D0(cs)) / 864e5));
+        const off = Math.max(0, Math.round((D0(g.start) - D0(cs)) / DAY));
         updateDoc(x.ref, {
-          d: [...Array(off).fill(0), ...(g.d || [])]
-            .slice(0, 30)
-            .map((v) => (v == 1 ? 1 : 0)),
+          d: [...Array(off).fill(0), ...(g.d || [])].slice(0, 30).map((v) => (v == 1 ? 1 : 0)),
           start: deleteField(),
         }).catch(() => {});
       });
@@ -593,12 +820,12 @@ P.goals = () => {
     onErr,
   );
   const setDay = (gid, i, v, undo) => {
-    const x = docs.find((y) => y.id === gid);
-    if (!x) return;
-    const d = Array.from({ length: 30 }, (_, k) => ((x.data().d || [])[k] == 1 ? 1 : 0));
+    const r = R.find((y) => y.id === gid);
+    if (!r) return;
+    const d = [...r.d];
     d[i] = v === undefined ? 1 - d[i] : v;
     if (navigator.vibrate) navigator.vibrate(12);
-    updateDoc(x.ref, { d }).catch((y) => {
+    updateDoc(r.ref, { d }).catch((y) => {
       if (undo) undo();
       toast(err(y));
     });
@@ -606,7 +833,7 @@ P.goals = () => {
   $("#gl").onclick = async (e) => {
     const b = e.target.closest("button");
     if (!b) return;
-    if (b.id === "rs2") return restart();
+    if (b.dataset.rs) return restartRoad(b.dataset.rs);
     if (b.dataset.g) return setDay(b.dataset.g, +b.dataset.i);
     if (b.dataset.del && (await dlg({ title: "Delete this goal?", msg: "Its checkmarks will be removed too.", ok: "Delete", danger: true })))
       deleteDoc(doc(col, b.dataset.del)).catch((x) => toast(err(x)));
@@ -782,10 +1009,8 @@ P.road = async () => {
     return onErr(x);
   }
   if (my !== rid) return;
-  const tn = new Date();
-  tn.setHours(0, 0, 0, 0);
-  const idx = profile.cycleStart ? Math.round((tn - new Date(profile.cycleStart + "T00:00:00")) / 864e5) : 0,
-    t = calc(profile, g.docs, idx),
+  const R = g.docs.map((d) => road(d, profile.cycleStart)),
+    t = calc(profile, R),
     x = { notes: nt.size, folders: fo.size, friends: fr.docs.filter((d) => d.data().status === "accepted").length },
     have = new Set([...(profile.awards || []), ...AW.filter((a) => a[5](t, x)).map((a) => a[0])]);
   grant(t, x);
@@ -794,11 +1019,44 @@ P.road = async () => {
     hue = (L) => `hsl(${(L * 47) % 360} 85% 62%)`,
     c1 = profile.c1 || "#5865f2", c2 = profile.c2 || "#eb459e",
     roles = [[rankOf(lv), hue(lv)], t.best ? [t.best + "-day best streak", "#ff8a3d"] : 0, t.checks ? [t.checks + " check-ins", "#38bdf8"] : 0,
-      [have.size + " awards", "#f5c542"], t.forged ? [t.forged + " goals forged", "#3ddc84"] : 0].filter(Boolean),
+      [have.size + " awards", "#f5c542"], t.forged ? [plural(t.forged, "road") + " forged", "#3ddc84"] : 0].filter(Boolean),
     badges = AW.filter((a) => have.has(a[0])).slice(0, 10).map((a) => `<span title="${esc(a[2])}">${a[1]}</span>`).join(""),
     nodes = Array.from({ length: 7 }, (_, i) => Math.max(1, lv - 1) + i)
       .map((L) => `<div class="rn${L < lv ? " dn" : L === lv ? " cur" : ""}"><i>${L}</i><b>${rankOf(L)}</b><em>${lvStart(L)} xp</em></div>`).join("");
-  $("#rd").innerHTML = `<div class="dc"><div class="bn" id="bn" style="background:linear-gradient(120deg,${c1},${c2},${c1})"></div><div class="dcb">
+  // banners: earned by finishing roads, optionally worn on the profile card
+  const owned = new Set([...(profile.banners || []), ...t.banners]),
+    worn = () => BN.find((b) => b.id === profile.banner && owned.has(b.id)),
+    bnCss = () => {
+      const b = worn();
+      return b
+        ? `background:#000 url('${bnSrc(b)}') center/cover no-repeat`
+        : `background:linear-gradient(120deg,${profile.c1 || "#5865f2"},${profile.c2 || "#eb459e"},${profile.c1 || "#5865f2"})`;
+    },
+    bnApply = () => {
+      const el = $("#bn");
+      if (!el) return;
+      el.style.cssText = bnCss();
+      el.classList.toggle("img", !!worn());
+    },
+    drawBn = () => {
+      const cur = worn(),
+        h = $("#bnh"),
+        g = $("#bng");
+      if (!h || !g) return;
+      h.textContent = `Banner rewards · ${owned.size}/${BN.length}`;
+      g.innerHTML = BN.map((b, i) => {
+        const got = owned.has(b.id),
+          eq = !!cur && cur.id === b.id;
+        return bnFig(
+          b,
+          got ? 100 : 0,
+          got,
+          `<div><b>${b.name}</b><small>${bnRange(i)}</small></div>${got ? `<button class="btn ghost sm" data-eq="${b.id}">${eq ? "Remove" : "Use on profile"}</button>` : ""}`,
+          eq ? " eq" : "",
+        );
+      }).join("");
+    };
+  $("#rd").innerHTML = `<div class="dc"><div class="bn${worn() ? " img" : ""}" id="bn" style="${bnCss()}"></div><div class="dcb">
  <div class="dav">${A(profile)}<span class="lvb">Lv ${lv}</span></div>
  <div class="dnm"><b>${esc(profile.username)}</b><span class="rk" style="color:${hue(lv)}">${rankOf(lv)}</span></div>
  <div class="badges">${badges || '<small class="muted">No badges yet. Check off a day to earn your first.</small>'}</div>
@@ -807,15 +1065,31 @@ P.road = async () => {
  <div class="dsec"><small>ROLES</small><div class="roles">${roles.map(([n, c]) => `<span class="role"><i style="background:${c}"></i>${esc(n)}</span>`).join("")}</div></div>
  <div><button class="btn ghost" id="es">Edit style</button></div></div></div>
  <div class="card" id="ep" hidden><label>Banner colors</label><div class="row"><input type="color" id="c1" value="${c1}"><input type="color" id="c2" value="${c2}"></div><label>About me</label><textarea id="ab" maxlength="160">${esc(profile.bio || "")}</textarea><div><button class="btn" id="sv2">Save style</button></div></div>
- <h3>The road ahead</h3><div class="card"><div class="road">${nodes}</div><small class="muted">10 XP per check-in · 30 per perfect day · 200 per forged goal · 100 per finished 30 days</small></div>
- <h3>Awards · ${have.size}/${AW.length}</h3><div class="awg">${AW.map((a) => `<div class="aw${have.has(a[0]) ? "" : " lk"}" style="--c:${a[4]}"><span class="ic">${a[1]}</span><b>${a[2]}</b><small>${a[3]}</small></div>`).join("")}</div>`;
+ <h3>The road ahead</h3><div class="card"><div class="road">${nodes}</div><small class="muted">10 XP per check-in · 30 per perfect day · a bonus for every road you forge (200 XP at 30 days, scaled by length) · 100 per road run to its last day</small></div>
+ <h3>Awards · ${have.size}/${AW.length}</h3><div class="awg">${AW.map((a) => `<div class="aw${have.has(a[0]) ? "" : " lk"}" style="--c:${a[4]}"><span class="ic">${a[1]}</span><b>${a[2]}</b><small>${a[3]}</small></div>`).join("")}</div>
+ <h3 id="bnh"></h3><small class="muted">Finish a road to earn its banner. Longer roads unlock rarer banners.</small><div class="bng" id="bng"></div>`;
   $("#es").onclick = () => ($("#ep").hidden = !$("#ep").hidden);
+  drawBn();
+  $("#bng").onclick = async (e) => {
+    const b = e.target.closest("[data-eq]");
+    if (!b) return;
+    const id = profile.banner === b.dataset.eq ? "" : b.dataset.eq;
+    try {
+      await updateDoc(doc(db, "users", me.uid), { banner: id });
+      profile.banner = id;
+      bnApply();
+      drawBn();
+      toast(id ? "Banner applied to your profile" : "Banner removed");
+    } catch (y) {
+      onErr(y);
+    }
+  };
   $("#sv2").onclick = async () => {
     const d = { c1: $("#c1").value, c2: $("#c2").value, bio: $("#ab").value.trim() };
     try {
       await updateDoc(doc(db, "users", me.uid), d);
       Object.assign(profile, d);
-      $("#bn").style.background = `linear-gradient(120deg,${d.c1},${d.c2},${d.c1})`;
+      bnApply();
       $("#abt").textContent = d.bio || "Nothing here yet. Tell people about your road.";
       toast("Style saved");
     } catch (y) { onErr(y); }
@@ -949,10 +1223,11 @@ P.settings = () => {
  <div class="card"><label>Theme</label><div class="row"><button class="btn ghost" data-t="dark">Black</button><button class="btn ghost" data-t="light">White</button></div>
  <label>Accent color</label><div class="row"><input type="color" id="sc" value="${profile.accent || "#888888"}"><button class="btn ghost" id="sr">Reset accent</button></div>
  <div><button class="btn ghost" id="sd">Reset all settings to default</button></div></div>
- <div class="card"><label>Progress report</label><small>Completion, streaks, missed days and your strongest goals for this 30-day cycle.</small><div><a class="btn ghost" href="report.html">Open report</a></div></div>
+ <div class="card"><label>Progress report</label><small>Completion, streaks, missed days and your strongest goals for every road.</small><div><a class="btn ghost" href="report.html">Open report</a></div></div>
  <div class="card"><button class="btn ghost" id="so">Log out</button></div>
  <div class="card danger"><label>Delete account</label><small>Permanently deletes your goals, notes, friendships and profile. This cannot be undone.</small>
- <input type="password" id="dp" placeholder="Your password" autocomplete="current-password"><input id="dc" placeholder="Type DELETE to confirm" autocomplete="off" autocapitalize="characters" spellcheck="false"><div><button class="btn" id="dx" disabled>Delete my account</button></div></div>`;
+ <input type="password" id="dp" placeholder="Your password" autocomplete="current-password"><input id="dc" placeholder="Type DELETE to confirm" autocomplete="off" autocapitalize="characters" spellcheck="false"><div><button class="btn" id="dx" disabled>Delete my account</button></div></div>
+ <p class="muted" style="text-align:center"><small>Forged build v7 · custom roads</small></p>`;
   const mark = () =>
     document
       .querySelectorAll("[data-t]")
@@ -1047,39 +1322,28 @@ P.report = async () => {
       '<p class="muted">No goals yet. Add some on the Goals page and your report will show up here.</p>';
     return;
   }
-  const t = new Date();
-  t.setHours(0, 0, 0, 0);
-  const cs = profile.cycleStart,
-    idx = cs ? Math.round((t - new Date(cs + "T00:00:00")) / 864e5) : 0,
-    past = Math.min(Math.max(idx, 0), 30);
-  const rows = s.docs.map((x) => {
-    const g = x.data(),
-      d = Array.from({ length: 30 }, (_, i) => ((g.d || [])[i] == 1 ? 1 : 0)),
-      sum = (a) => a.reduce((p, c) => p + c, 0),
-      done = sum(d),
-      pd = sum(d.slice(0, past));
-    return {
-      t: g.title,
-      d,
-      done,
-      miss: past - pd,
-      rate: past ? Math.round((pd / past) * 100) : null,
-      p: Math.round((done / 30) * 100),
-      cur: streak(d, idx),
-      best: bestRun(d),
-    };
-  });
-  const total = rows.reduce((a, r) => a + r.done, 0),
-    overall = Math.round(rows.reduce((a, r) => a + r.p, 0) / rows.length);
-  let perfect = 0;
-  for (let i = 0; i < past; i++) if (rows.every((r) => r.d[i])) perfect++;
+  const R = s.docs.map((x) => road(x, profile.cycleStart)),
+    rows = R.map((r) => ({
+      t: r.title,
+      n: r.n,
+      done: r.done,
+      miss: r.missed,
+      rate: r.past ? Math.round((r.donePast / r.past) * 100) : null,
+      p: r.p,
+      cur: r.cur,
+      best: r.best,
+    }));
+  const total = sum(R.map((r) => r.done)),
+    overall = Math.round(sum(R.map((r) => r.p)) / R.length),
+    forged = R.filter((r) => r.full).length,
+    perfect = perfectDays(R);
   const sorted = [...rows].sort((a, b) => b.p - a.p),
     top = sorted[0],
     low = sorted[sorted.length - 1];
   $("#rp").innerHTML = `<div class="grid">${[
     ["Overall completion", overall + "%"],
     ["Check-ins", total],
-    ["Cycle day", Math.min(Math.max(idx + 1, 1), 30) + " / 30"],
+    ["Roads forged", forged + " / " + R.length],
     ["Perfect days", perfect],
   ]
     .map(([k, v]) => `<div class="card"><small>${k}</small><span class="big">${v}</span></div>`)
@@ -1088,7 +1352,7 @@ P.report = async () => {
  <h3>By goal</h3><div class="rt"><table><thead><tr><th>Goal</th><th>Done</th><th>Missed</th><th>Hit rate</th><th>Streak</th><th>Best</th></tr></thead><tbody>${rows
    .map(
      (r) =>
-       `<tr><td>${esc(r.t)}</td><td>${r.done}/30</td><td>${r.miss}</td><td>${r.rate === null ? "-" : r.rate + "%"}</td><td>${r.cur}</td><td>${r.best}</td></tr>`,
+       `<tr><td>${esc(r.t)}</td><td>${r.done}/${r.n}</td><td>${r.miss}</td><td>${r.rate === null ? "-" : r.rate + "%"}</td><td>${r.cur}</td><td>${r.best}</td></tr>`,
    )
    .join("")}</tbody></table></div>
  <p class="muted"><small>Hit rate = checked days ÷ days that have already passed. Missed counts only past days, so today is never a miss until tomorrow.</small></p>`;
@@ -1133,7 +1397,7 @@ const show = (name, initial) => {
   document.title = "Forged · " + T[name];
   if (!initial) document.documentElement.classList.add("quick");
   document.querySelectorAll("header nav a").forEach((a) => a.classList.toggle("on", pageOf(a.href) === name));
-  scrollTo(0, 0);
+  toTop();
   m().innerHTML = sk(3, 80);
   ld.go();
   const mn2 = $("main");

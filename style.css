@@ -98,7 +98,7 @@ body[data-page=report] main{max-width:900px}
 .sheet table{border-collapse:separate;border-spacing:0;width:max-content;min-width:100%}
 .sheet th,.sheet td{border-right:1px solid var(--line);border-bottom:1px solid var(--line);text-align:center;padding:0;height:46px;min-width:36px;font-weight:400}
 .sheet tr:last-child>*{border-bottom:0}
-.sheet .gn{position:sticky;left:0;z-index:2;background:var(--card);min-width:190px;max-width:190px;text-align:left;padding:6px 10px;border-right:2px solid var(--fg)}
+.sheet .gn{position:sticky;left:0;z-index:2;background:var(--card);min-width:230px;max-width:230px;text-align:left;padding:6px 10px;border-right:2px solid var(--fg)}
 .gc{display:flex;justify-content:space-between;align-items:center;gap:8px}
 .gc b{font-weight:600}.gc .seal{margin:0}
 .dh b{display:block;font-size:12px;line-height:1.2}.dh small{font-size:10px}
@@ -138,11 +138,6 @@ body[data-page=report] main{max-width:900px}
 
 /* ===== v4: softer light, scrollbar, red x, living bg, notes, road, mobile ===== */
 [data-theme=light]{--bg:#dedad0;--fg:#1c1b18;--mut:#5d5a52;--card:#e9e5db;--line:#bdb8ac}
-*{scrollbar-width:thin;scrollbar-color:var(--mut) transparent}
-::-webkit-scrollbar{width:10px;height:10px}
-::-webkit-scrollbar-track{background:transparent}
-::-webkit-scrollbar-thumb{background:var(--line);border-radius:10px;border:2px solid var(--bg)}
-::-webkit-scrollbar-thumb:hover{background:var(--mut)}
 html{-webkit-tap-highlight-color:transparent}
 .x{background:none;border:1px solid transparent;color:#e5484d;font:700 24px/1 "Chakra Petch",sans-serif;width:30px;height:30px;border-radius:4px;cursor:pointer;flex:none;display:inline-grid;place-items:center;padding:0;transition:background .15s,color .15s,transform .15s}
 .x:hover{background:#e5484d;color:#fff;transform:rotate(90deg)}
@@ -309,3 +304,127 @@ nav a.on{animation:navpop .3s cubic-bezier(.2,.8,.2,1)}
  .mact .btn{flex:1}
  .md{font-size:14px}
 }
+
+/* ===== v7: custom roads, progress rings, banner rewards, scrollbars ===== */
+
+/* --- scrollbars ---------------------------------------------------------
+   Chromium 121+ ignores ::-webkit-scrollbar whenever scrollbar-width or
+   scrollbar-color is set, so the standard properties are only used where the
+   webkit pseudo-elements do not exist (Firefox). Everywhere else the custom
+   pill below is used. */
+:root{--sb-thumb:color-mix(in srgb,var(--fg) 24%,transparent);--sb-hover:color-mix(in srgb,var(--fg) 52%,transparent);--sb-track:color-mix(in srgb,var(--fg) 5%,transparent)}
+@supports not selector(::-webkit-scrollbar){*{scrollbar-width:thin;scrollbar-color:var(--sb-thumb) transparent}}
+html{scrollbar-gutter:stable}
+::-webkit-scrollbar{width:14px;height:14px;background:transparent}
+::-webkit-scrollbar-track{background:transparent;border-radius:999px}
+::-webkit-scrollbar-track:hover{background:var(--sb-track)}
+::-webkit-scrollbar-button{display:none;width:0;height:0}
+::-webkit-scrollbar-corner{background:transparent}
+::-webkit-scrollbar-thumb{background-color:var(--sb-thumb);background-clip:padding-box;border:4px solid transparent;border-radius:999px;min-height:56px;min-width:56px;transition:background-color .3s ease,border-width .2s ease}
+::-webkit-scrollbar-thumb:hover{background-color:var(--sb-hover);border-width:3px}
+::-webkit-scrollbar-thumb:active{background-color:transparent;background-image:linear-gradient(180deg,#5865f2,#eb459e);border-width:3px}
+::-webkit-scrollbar-thumb:horizontal:active{background-image:linear-gradient(90deg,#5865f2,#eb459e)}
+/* scrollers inside cards get a slimmer rail that sits flush with their rounded frame */
+.sheet::-webkit-scrollbar,.rt::-webkit-scrollbar,.road::-webkit-scrollbar,.ns::-webkit-scrollbar{width:12px;height:12px}
+.sheet::-webkit-scrollbar-track,.rt::-webkit-scrollbar-track,.road::-webkit-scrollbar-track,.ns::-webkit-scrollbar-track{background:var(--sb-track);margin:0 6px}
+.sheet::-webkit-scrollbar-thumb,.rt::-webkit-scrollbar-thumb,.road::-webkit-scrollbar-thumb,.ns::-webkit-scrollbar-thumb{border-width:3px}
+/* the tab strip scrolls, but never needs a visible bar */
+nav{scrollbar-width:none}nav::-webkit-scrollbar{display:none}
+.sheet,.rt,.road{overscroll-behavior-x:contain}
+.ns{overscroll-behavior-y:contain}
+@media(prefers-reduced-motion:no-preference){html,.sheet,.rt,.road,.ns{scroll-behavior:smooth}}
+@media(hover:none){::-webkit-scrollbar{width:8px;height:8px}}
+
+/* --- toasts stack instead of overlapping --- */
+#tc{position:fixed;left:0;right:0;bottom:24px;z-index:250;display:flex;flex-direction:column-reverse;align-items:center;gap:8px;padding:0 12px;pointer-events:none}
+.toast{position:static;transform:none;max-width:min(92vw,420px);text-align:center;animation:tin2 .35s cubic-bezier(.2,.8,.2,1) both}
+@keyframes tin2{from{opacity:0;transform:translateY(16px)}}
+@media(max-width:700px){#tc{bottom:calc(86px + env(safe-area-inset-bottom))}}
+@media(prefers-reduced-motion:reduce){.toast{animation:none!important}}
+
+/* --- add form: day picker --- */
+.gform{gap:12px}
+.gfr{display:flex;gap:10px;align-items:stretch;flex-wrap:wrap}
+.gfr #gt{flex:1 1 220px;width:auto;min-width:0}
+.dayin{display:flex;align-items:center;border:1px solid var(--line);border-radius:3px;background:var(--bg);font-weight:400;overflow:hidden;transition:border-color .2s,box-shadow .2s}
+.dayin:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 25%,transparent)}
+.dayin input{width:58px;border:0;border-radius:0;background:transparent;text-align:center;font-weight:700;padding:11px 0;-moz-appearance:textfield;appearance:textfield}
+.dayin input:focus{box-shadow:none}
+.dayin input::-webkit-outer-spin-button,.dayin input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.dayin .st{align-self:stretch;width:40px;border:0;background:transparent;color:var(--fg);font:700 18px "Chakra Petch",sans-serif;cursor:pointer;transition:background .15s}
+.dayin .st:hover{background:color-mix(in srgb,var(--fg) 12%,transparent)}
+.dayin .st:active{background:color-mix(in srgb,var(--fg) 22%,transparent)}
+.dayin span{padding:0 14px 0 4px;color:var(--mut)}
+.gfr2{display:flex;align-items:center;justify-content:space-between;gap:12px 18px;flex-wrap:wrap}
+.presets{display:flex;gap:6px;flex-wrap:wrap}
+.prev{display:flex;align-items:center;gap:10px;min-width:0}
+.prev img{height:24px;width:auto;border-radius:3px;border:1px solid var(--line);display:block;flex:none}
+.prev b{color:var(--fg)}
+.btn.sm{padding:6px 12px;font-size:13px}
+
+/* --- road rows: name cell, chips, icon buttons --- */
+.gi{min-width:0;flex:1;display:flex;flex-direction:column;gap:3px}
+.gi b{font-weight:600;overflow-wrap:anywhere}
+.gmeta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.chip{display:inline-block;border:1px solid var(--line);border-radius:20px;padding:0 9px;font:600 11px/18px "Chakra Petch",sans-serif;color:var(--mut);white-space:nowrap}
+.gact{display:flex;align-items:center;gap:2px;flex:none}
+.gact .x{width:28px;height:28px;font-size:22px}
+.ib{background:none;border:1px solid transparent;color:var(--mut);width:28px;height:28px;border-radius:4px;cursor:pointer;display:inline-grid;place-items:center;padding:0;flex:none;transition:background .15s,color .15s}
+.ib svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;transition:transform .45s cubic-bezier(.2,.8,.2,1)}
+.ib:hover{background:var(--fg);color:var(--bg)}
+.ib:hover svg{transform:rotate(-200deg)}
+.sheet .gc{align-items:center}
+.sheet tr.fin .gn{box-shadow:inset 3px 0 0 var(--accent)}
+.sheet .endh{min-width:158px;text-align:left;padding-left:12px;color:var(--mut)}
+.sheet td.end{text-align:left;border-right:0;background:color-mix(in srgb,var(--fg) 3%,transparent)}
+.endc{display:flex;align-items:center;gap:10px;padding:5px 12px;white-space:nowrap}
+.endt{display:flex;flex-direction:column;line-height:1.25}
+.endt b{font-size:14px}.endt small{font-size:11px}
+.endc .btn{margin-left:8px}
+
+/* --- progress ring (one per road) --- */
+.mr{width:40px;height:40px;flex:none;display:block;overflow:visible;filter:drop-shadow(0 0 4px color-mix(in srgb,var(--accent) 30%,transparent))}
+.mr circle{fill:none;stroke-width:3.6}
+.mr .mt{stroke:var(--line)}
+.mr .mm{stroke:#e5484d}
+.mr .mo{stroke:var(--accent)}
+.mr text{fill:var(--fg);font:700 9.5px "Chakra Petch",sans-serif;text-anchor:middle}
+.mr .mk{fill:none;stroke:var(--accent);stroke-width:3.2;stroke-linecap:round;stroke-linejoin:round}
+.mr.full .mt{stroke:var(--accent)}
+.mend{aspect-ratio:1;display:grid;place-items:center}
+.mend .mr{width:100%;height:100%;max-width:46px}
+
+/* --- banner rewards --- */
+.rw{margin:0;display:flex;flex-direction:column;gap:8px;min-width:0}
+.rwi{position:relative;border-radius:6px;overflow:hidden;border:1px solid var(--line);background:#000;line-height:0;transition:border-color .3s,box-shadow .3s}
+.rwi img{display:block;width:100%;height:auto;aspect-ratio:5.75/1;object-fit:cover}
+.rwi .base{filter:grayscale(1) brightness(.3)}
+.rwi .fill{position:absolute;inset:0;height:100%;clip-path:inset(0 calc(100% - var(--p,0%)) 0 0)}
+.rwb{position:absolute;right:8px;bottom:8px;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;background:rgba(0,0,0,.72);color:#fff;line-height:0}
+.rwb .ck{width:13px;height:13px;stroke-width:2.6}
+.rw.got .rwi{border-color:var(--accent);box-shadow:0 0 18px color-mix(in srgb,var(--accent) 22%,transparent)}
+.rw.got .rwb{background:var(--accent);color:var(--on)}
+.rw.eq .rwi{outline:2px solid var(--accent);outline-offset:2px}
+.rw figcaption{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.rw figcaption>div{display:flex;flex-direction:column;line-height:1.3;min-width:0}
+.rw figcaption b{font-size:13px;letter-spacing:.5px}
+.rw figcaption small{font-size:12px}
+.rws{margin-top:22px}
+.rwg{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px}
+.rwc{display:flex;flex-direction:column;gap:10px;background:var(--card);border:1px solid var(--line);border-left:2px solid var(--fg);border-radius:4px;padding:14px;min-width:0}
+.rwh{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.rwh b{overflow-wrap:anywhere}
+.bng{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;margin-top:10px}
+.bn.img{animation:none;background-size:cover}
+.gcard .rw{margin-top:2px}
+@media(prefers-reduced-motion:no-preference){.rwi .fill{transition:clip-path .6s cubic-bezier(.2,.7,.2,1)}}
+@media(max-width:700px){
+ .rws{display:none}
+ .bng{grid-template-columns:1fr}
+ .gcard .gi small:last-child{font-size:12px}
+ .gfr #gt{flex-basis:100%}
+ .gfr .dayin{flex:1}
+ .gfr .btn{flex:none}
+ .gfr2{align-items:flex-start}
+}
+@media(max-width:480px){.gfr2{flex-direction:column;align-items:stretch}.prev{order:-1}}
