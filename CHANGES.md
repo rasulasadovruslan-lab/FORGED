@@ -1,9 +1,7 @@
-# Forged v4
-- Removed the "Done" row from the goals grid.
-- Custom thin scrollbar; red bold x for delete.
-- Phone friendly: bottom tab bar, bigger touch targets, no sideways scrolling, notes switch list/editor.
-- Shinier and alive: drifting glow background, shimmering numbers, glowing ring, ripple on press, check pop, smooth page transitions (no splash on tab switches).
-- Softer light mode (warm grey instead of white).
-- Notes rebuilt: folders, one note per tab, rich text (bold, italic, underline, strike, fonts, sizes, colors, highlight, headings, lists), autosave, old notes are never lost.
-- Your Road: XP, levels and ranks, 16 awards, Discord-style profile card (banner colors, about me, badges, roles). Level pill in header.
-Deploy: replace all files in your repo (new file: road.html), commit, hard-refresh.
+# Forged v5
+- Tabs switch without reloading the page: header stays put, content cross-fades, no more blank flash.
+- Loading animations: gradient progress bar at the top, shimmering skeleton cards while data loads, spinner on the login button.
+- Header appears instantly on refresh (cached), notes autosave when you leave a tab, listeners are cleaned up on every switch.
+- Back/forward buttons work between tabs.
+- New F icon (traced from your logo): favicon.svg, favicon.ico, apple-touch-icon.png, 192/512 icons, manifest.webmanifest. Every page links them.
+Deploy: replace all files in the repo (new files: the icon files + manifest), commit, hard-refresh.

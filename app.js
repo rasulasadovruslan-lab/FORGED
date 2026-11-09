@@ -41,8 +41,11 @@ const cfg = {
 const app = initializeApp(cfg),
   auth = getAuth(app),
   db = getFirestore(app);
+let page = document.body.dataset.page,
+  rid = 0,
+  subs = [],
+  offs = [];
 const $ = (s) => document.querySelector(s),
-  page = document.body.dataset.page,
   m = () => $("#app");
 const esc = (s) =>
   String(s).replace(
@@ -127,6 +130,30 @@ let me,
   first = true;
 const P = {},
   quick = document.documentElement.classList.contains("quick");
+const snap = (...a) => {
+  const u = onSnapshot(...a);
+  subs.push(u);
+  return u;
+};
+const on = (t, e, f) => {
+  t.addEventListener(e, f);
+  offs.push(() => t.removeEventListener(e, f));
+};
+const sk = (n, h = 46) =>
+  Array.from({ length: n }, () => `<div class="sk" style="height:${h}px"></div>`).join("");
+const ld = {
+  go() {
+    const b = $("#ld");
+    if (!b) return;
+    b.className = "";
+    void b.offsetWidth;
+    b.className = "run";
+  },
+  done() {
+    const b = $("#ld");
+    if (b) b.className = "done";
+  },
+};
 const fit = (t) => {
   t.style.height = "auto";
   t.style.height = Math.max(110, t.scrollHeight) + "px";
@@ -301,14 +328,6 @@ document.addEventListener("pointermove", (e) => {
     c.style.setProperty("--my", e.clientY - r.top + "px");
   }
 });
-document.addEventListener("click", (e) => {
-  const a = e.target.closest("nav a");
-  if (!a || a.classList.contains("on") || "onpagereveal" in window) return;
-  e.preventDefault();
-  document.body.classList.add("leave");
-  setTimeout(() => (location = a.href), 220);
-});
-
 P.auth = () => {
   let up = false;
   const f = $("#f");
@@ -332,6 +351,7 @@ P.auth = () => {
     e.preventDefault();
     const b = f.querySelector(".btn");
     b.disabled = busy = true;
+    b.classList.add("busy");
     try {
       const em = $("#em").value.trim(),
         pw = $("#pw").value;
@@ -367,6 +387,7 @@ P.auth = () => {
     } catch (x) {
       toast(err(x));
       b.disabled = false;
+      b.classList.remove("busy");
     } finally {
       busy = false;
     }
@@ -378,7 +399,7 @@ P.goals = () => {
  <div class="card gauge"><div class="ring"><svg viewBox="0 0 220 220" aria-hidden="true"><circle class="tr" cx="110" cy="110" r="90"/><circle class="no" id="rg2" cx="110" cy="110" r="90" stroke-dasharray="0 999"/><circle class="ok" id="rg1" cx="110" cy="110" r="90" stroke-dasharray="0 999"/></svg><div class="rc"><span id="all">0%</span><small id="cyc"></small></div></div>
  <small id="lg"></small>
  <div class="meters"><div><div class="row sb"><b>Success</b><b id="ms">-</b></div><div class="bar"><i id="mb1" style="width:0"></i></div></div><div><div class="row sb"><b>Fail</b><b id="mf">-</b></div><div class="bar fail"><i id="mb2" style="width:0"></i></div></div></div></div>
- <form id="gf" class="row card" style="flex-direction:row"><input id="gt" placeholder="Add a goal, e.g. Read 20 pages" required maxlength="60"><button class="btn">Add</button></form><div id="gl"></div>`;
+ <form id="gf" class="row card" style="flex-direction:row"><input id="gt" placeholder="Add a goal, e.g. Read 20 pages" required maxlength="60"><button class="btn">Add</button></form><div id="gl">${sk(4, 52)}</div>`;
   const col = collection(db, "users", me.uid, "goals");
   let cs = profile.cycleStart || "",
     docs = [],
@@ -488,16 +509,16 @@ P.goals = () => {
     $("#mb2").style.width = (hit === null ? 0 : 100 - hit) + "%";
     $("#lg").textContent = `${done} done · ${missed} missed · ${Math.max(total - done - missed, 0)} to go`;
     const all = n ? Math.round(sum / n) : 0,
-      dl = firstDraw ? (quick ? 250 : 900) : 0;
+      dl = firstDraw ? (document.documentElement.classList.contains("quick") ? 250 : 900) : 0;
     firstDraw = false;
     if (cs) grant(calc(profile, docs, idx), { notes: 0, folders: 0, friends: 0 });
-    setTimeout(() => count($("#all"), all), dl);
+    setTimeout(() => $("#all") && count($("#all"), all), dl);
     if (profile.pct !== all) {
       profile.pct = all;
       updateDoc(doc(db, "users", me.uid), { pct: all }).catch(() => {});
     }
   };
-  onSnapshot(
+  snap(
     query(col, orderBy("at")),
     (s) => {
       docs = s.docs;
@@ -546,7 +567,7 @@ P.goals = () => {
 };
 
 P.notes = () => {
-  m().innerHTML = `<div class="nb" id="nb"><aside class="ns card"><div class="row sb"><b>Folders</b><button class="link" id="nf">+ Folder</button></div><div class="fos" id="fo"></div><div class="row" id="fa"></div><button class="btn" id="nn">+ New note</button><div id="nl" class="nls"></div></aside>
+  m().innerHTML = `<div class="nb" id="nb"><aside class="ns card"><div class="row sb"><b>Folders</b><button class="link" id="nf">+ Folder</button></div><div class="fos" id="fo"></div><div class="row" id="fa"></div><button class="btn" id="nn">+ New note</button><div id="nl" class="nls">${sk(3, 56)}</div></aside>
  <section class="ne card"><p class="muted" id="em">Pick a note on the left, or make a new one.</p><div id="ex" hidden>
  <div class="row"><button class="btn ghost bk" id="bk">← Notes</button><input class="tt" id="nt" placeholder="Title" maxlength="80"><button class="x" id="nd" title="Delete note" aria-label="Delete note">×</button></div>
  <div class="row"><select id="nfs"></select><small id="sv" class="muted"></small></div>
@@ -588,7 +609,7 @@ P.notes = () => {
     const id = sel, d = { title: $("#nt").value.trim(), html: clean($("#rt").innerHTML), folder: $("#nfs").value };
     Object.assign(N[id], d, { upd: Date.now() });
     updateDoc(doc(nc, id), { ...d, upd: serverTimestamp() })
-      .then(() => { if (sel === id) $("#sv").textContent = "Saved ✓"; })
+      .then(() => { if (sel === id && $("#sv")) $("#sv").textContent = "Saved ✓"; })
       .catch(onErr);
     drawN();
   };
@@ -610,13 +631,13 @@ P.notes = () => {
     drawF();
     drawN();
   };
-  onSnapshot(query(nc), (s) => {
+  snap(query(nc), (s) => {
     N = {};
     s.docs.forEach((x) => (N[x.id] = x.data()));
     if (sel && !N[sel]) shut();
     drawN();
   }, onErr);
-  onSnapshot(query(fc, orderBy("at")), (s) => {
+  snap(query(fc, orderBy("at")), (s) => {
     F = s.docs;
     if (cur !== "all" && cur !== "none" && !F.some((f) => f.id === cur)) cur = "all";
     drawF();
@@ -670,7 +691,7 @@ P.notes = () => {
     e.preventDefault();
     document.execCommand("insertText", false, e.clipboardData.getData("text/plain"));
   };
-  document.addEventListener("selectionchange", () => {
+  on(document, "selectionchange", () => {
     const s = getSelection();
     if (s.rangeCount && $("#rt") && $("#rt").contains(s.anchorNode)) rg = s.getRangeAt(0).cloneRange();
   });
@@ -690,17 +711,24 @@ P.notes = () => {
   $("#fz").onchange = (e) => { if (e.target.value) run("fontSize", e.target.value); e.target.value = ""; };
   $("#tc").onchange = (e) => run("foreColor", e.target.value);
   $("#hc").onchange = (e) => run("hiliteColor", e.target.value);
-  addEventListener("pagehide", flush);
+  on(window, "pagehide", flush);
+  offs.push(flush);
 };
 
 P.road = async () => {
-  m().innerHTML = '<h2>Your Road</h2><div id="rd"><p class="muted">Loading...</p></div>';
+  const my = rid;
+  m().innerHTML = '<h2>Your Road</h2><div id="rd">' + sk(1, 150) + sk(2, 90) + "</div>";
   const u = (c) => getDocs(collection(db, "users", me.uid, c));
   let g, nt, fo, fr;
   try {
     [g, nt, fo, fr] = await Promise.all([u("goals"), u("notes"), u("folders"),
       getDocs(query(collection(db, "friendships"), where("users", "array-contains", me.uid)))]);
-  } catch (x) { $("#rd").innerHTML = ""; return onErr(x); }
+  } catch (x) {
+    if (my !== rid) return;
+    $("#rd").innerHTML = "";
+    return onErr(x);
+  }
+  if (my !== rid) return;
   const tn = new Date();
   tn.setHours(0, 0, 0, 0);
   const idx = profile.cycleStart ? Math.round((tn - new Date(profile.cycleStart + "T00:00:00")) / 864e5) : 0,
@@ -742,7 +770,7 @@ P.road = async () => {
 };
 
 P.friends = () => {
-  m().innerHTML = `<h2>Friends</h2><form id="ff" class="row card" style="flex-direction:row"><input id="fu" placeholder="Find a friend by username" required><button class="btn">Add</button></form><div id="fl"></div>`;
+  m().innerHTML = `<h2>Friends</h2><form id="ff" class="row card" style="flex-direction:row"><input id="fu" placeholder="Find a friend by username" required><button class="btn">Add</button></form><div id="fl">${sk(3, 64)}</div>`;
   $("#ff").onsubmit = async (e) => {
     e.preventDefault();
     const r = await getDocs(
@@ -767,7 +795,7 @@ P.friends = () => {
       toast("A request with this person already exists");
     }
   };
-  onSnapshot(
+  snap(
     query(
       collection(db, "friendships"),
       where("users", "array-contains", me.uid),
@@ -808,6 +836,7 @@ P.friends = () => {
         out = rows.filter(
           (r) => r.f.status === "pending" && r.f.from === me.uid,
         );
+      if (!$("#fl")) return;
       $("#fl").innerHTML =
         sec("Requests", inc, () => "wants to be friends") +
           sec("Friends", fr, (r) => (r.p.pct || 0) + "% overall") +
@@ -949,14 +978,17 @@ P.settings = () => {
 };
 
 P.report = async () => {
-  m().innerHTML = `<div class="row sb"><h2>Report</h2><a href="settings.html">← Settings</a></div><div id="rp"><p class="muted">Loading...</p></div>`;
+  const my = rid;
+  m().innerHTML = `<div class="row sb"><h2>Report</h2><a href="settings.html">← Settings</a></div><div id="rp">${sk(2, 90)}${sk(3, 46)}</div>`;
   let s;
   try {
     s = await getDocs(query(collection(db, "users", me.uid, "goals"), orderBy("at")));
   } catch (x) {
+    if (my !== rid) return;
     $("#rp").innerHTML = "";
     return onErr(x);
   }
+  if (my !== rid) return;
   if (s.empty) {
     $("#rp").innerHTML =
       '<p class="muted">No goals yet. Add some on the Goals page and your report will show up here.</p>';
@@ -1009,25 +1041,17 @@ P.report = async () => {
  <p class="muted"><small>Hit rate = checked days ÷ days that have already passed. Missed counts only past days, so today is never a miss until tomorrow.</small></p>`;
 };
 
-if (page === "auth") P.auth();
-onAuthStateChanged(auth, async (u) => {
-  me = u;
-  if (!u) {
-    if (page !== "auth") location = "index.html";
+const T = { goals: "Goals", road: "Your Road", notes: "Notes", friends: "Friends", profile: "Profile", settings: "Settings", report: "Report" };
+const pageOf = (u) => (new URL(u, location.href).pathname.split("/").pop() || "").replace(".html", "");
+const mount = (p) => {
+  if ($("header")) {
+    $("#pb").innerHTML = A(p);
+    $(".lv").textContent = "Lv " + lvOf(p.xp || 0);
     return;
   }
-  if (page === "auth") {
-    if (!busy) location = "goals.html";
-    return;
-  }
-  profile = (await getDoc(doc(db, "users", u.uid))).data() || {
-    username: "user",
-    theme: "dark",
-  };
-  applyTheme(profile);
   document.body.insertAdjacentHTML(
     "afterbegin",
-    `<header><a class="logo" href="goals.html"><img src="logo.png" alt="Forged"></a><span class="date" id="dt">${new Date().toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}</span><a class="lv" href="road.html">Lv ${lvOf(profile.xp || 0)}</a><nav>${TABS.map(([k, l]) => `<a href="${k}.html" class="${k === page ? "on" : ""}">${IC[k]}<span>${l}</span></a>`).join("")}</nav><div class="pm"><button class="avb" id="pb" aria-label="Account menu" aria-haspopup="true" aria-expanded="false">${A(profile)}</button><div class="menu" id="am" hidden><a href="profile.html">Profile</a><a href="settings.html">Settings</a><a href="report.html">Report</a><button id="lo">Log out</button></div></div></header>`,
+    `<header><a class="logo" href="goals.html"><img src="logo.png" alt="Forged"></a><span class="date" id="dt">${new Date().toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}</span><a class="lv" href="road.html">Lv ${lvOf(p.xp || 0)}</a><nav>${TABS.map(([k, l]) => `<a href="${k}.html" class="${k === page ? "on" : ""}">${IC[k]}<span>${l}</span></a>`).join("")}</nav><div class="pm"><button class="avb" id="pb" aria-label="Account menu" aria-haspopup="true" aria-expanded="false">${A(p)}</button><div class="menu" id="am" hidden><a href="profile.html">Profile</a><a href="settings.html">Settings</a><a href="report.html">Report</a><button id="lo">Log out</button></div></div></header>`,
   );
   const pb = $("#pb"),
     am = $("#am"),
@@ -1043,7 +1067,87 @@ onAuthStateChanged(auth, async (u) => {
   document.addEventListener("click", shut);
   document.addEventListener("keydown", (e) => e.key === "Escape" && shut());
   $("#lo").onclick = () => signOut(auth);
-  P[page]();
+};
+let introT;
+const show = (name, initial) => {
+  offs.forEach((f) => { try { f(); } catch {} });
+  offs = [];
+  subs.forEach((u) => u());
+  subs = [];
+  rid++;
+  page = name;
+  document.body.dataset.page = name;
+  document.title = "Forged · " + T[name];
+  if (!initial) document.documentElement.classList.add("quick");
+  document.querySelectorAll("header nav a").forEach((a) => a.classList.toggle("on", pageOf(a.href) === name));
+  scrollTo(0, 0);
+  m().innerHTML = sk(3, 80);
+  ld.go();
+  const mn2 = $("main");
+  mn2.classList.remove("intro");
+  void mn2.offsetWidth;
+  mn2.classList.add("intro");
+  clearTimeout(introT);
+  introT = setTimeout(() => mn2.classList.remove("intro"), 1800);
+  Promise.resolve(P[name]()).catch(onErr).finally(() => setTimeout(ld.done, 350));
+};
+const go = (name, push = true) => {
+  if (name === page) return;
+  if (push) history.pushState({}, "", name + ".html");
+  if (document.startViewTransition && !matchMedia("(prefers-reduced-motion: reduce)").matches)
+  {
+    const vt = document.startViewTransition(() => show(name));
+    [vt.ready, vt.finished, vt.updateCallbackDone].forEach((x) => x && x.catch(() => {}));
+  }
+  else {
+    const a = m();
+    a.classList.add("out");
+    setTimeout(() => { show(name); a.classList.remove("out"); }, 160);
+  }
+};
+document.addEventListener("click", (e) => {
+  const a = e.target.closest("a[href]");
+  if (!a || e.defaultPrevented || e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || a.target || !profile || page === "auth") return;
+  const u = new URL(a.href, location.href),
+    n = pageOf(u);
+  if (u.origin !== location.origin || !T[n]) return;
+  e.preventDefault();
+  go(n);
+});
+addEventListener("popstate", () => {
+  const n = pageOf(location.href);
+  if (T[n] && page !== "auth" && profile) go(n, false);
+});
+
+if (page === "auth") P.auth();
+else {
+  document.body.insertAdjacentHTML("afterbegin", '<div id="ld" class="run"></div>');
+  try {
+    const c = JSON.parse(localStorage.fp || "null");
+    if (c) mount(c);
+  } catch {}
+  m().innerHTML = sk(3, 80);
+}
+onAuthStateChanged(auth, async (u) => {
+  me = u;
+  if (!u) {
+    if (page !== "auth") {
+      try { localStorage.removeItem("fp"); } catch {}
+      location = "index.html";
+    }
+    return;
+  }
+  if (page === "auth") {
+    if (!busy) location = "goals.html";
+    return;
+  }
+  profile = (await getDoc(doc(db, "users", u.uid))).data() || { username: "user", theme: "dark" };
+  applyTheme(profile);
+  try {
+    localStorage.fp = JSON.stringify({ username: profile.username, photo: profile.photo || "", xp: profile.xp || 0 });
+  } catch {}
+  mount(profile);
+  show(page, true);
 });
 
 const mn = document.querySelector("main");

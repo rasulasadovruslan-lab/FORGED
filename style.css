@@ -257,3 +257,18 @@ input.tt{font:700 24px "Chakra Petch",sans-serif;border:0;background:transparent
  .tb{gap:5px}
 }
 [hidden]{display:none!important}
+
+/* ===== v5: seamless tab switching + loading animations ===== */
+#ld{position:fixed;top:0;left:0;height:3px;width:0;z-index:100;pointer-events:none;opacity:0;background:linear-gradient(90deg,#5865f2,#eb459e,#f5c542);box-shadow:0 0 12px #eb459e}
+#ld.run{opacity:1;animation:ldrun 1.8s cubic-bezier(.1,.7,.2,1) forwards}
+#ld.done{width:100%;opacity:0;transition:width .25s ease-out,opacity .4s .25s}
+@keyframes ldrun{from{width:0}to{width:85%}}
+.sk{border-radius:6px;margin-bottom:12px;background:linear-gradient(100deg,color-mix(in srgb,var(--fg) 6%,transparent) 30%,color-mix(in srgb,var(--fg) 15%,transparent) 50%,color-mix(in srgb,var(--fg) 6%,transparent) 70%);background-size:300% 100%;animation:skl 1.3s linear infinite}
+@keyframes skl{from{background-position:100% 0}to{background-position:-100% 0}}
+#app{transition:opacity .16s ease,transform .16s ease}
+#app.out{opacity:0;transform:translateY(8px)}
+.btn.busy{pointer-events:none;color:transparent!important}
+.btn.busy::before{content:"";position:absolute;inset:0;margin:auto;width:18px;height:18px;border-radius:50%;border:2px solid var(--on);border-top-color:transparent;animation:spin .7s linear infinite}
+nav a.on{animation:navpop .3s cubic-bezier(.2,.8,.2,1)}
+@keyframes navpop{from{transform:scale(.92)}to{transform:none}}
+@media(prefers-reduced-motion:reduce){.sk,#ld.run,nav a.on{animation:none!important}#ld.run{width:60%}}
